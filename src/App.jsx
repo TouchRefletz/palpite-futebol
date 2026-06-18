@@ -129,6 +129,21 @@ const renderTeamFlag = (name, className = "team-flag") => {
   return <span className="team-flag-emoji-fallback">{getTeamEmoji(name)}</span>;
 };
 
+const getGuessFilterLabel = (filter) => {
+  if (filter === 'all') return 'Todos';
+  if (filter === 'guessed') return 'Palpitados';
+  if (filter === 'missing') return 'Sem Palpite';
+  return '';
+};
+
+const getTimeFilterLabel = (filter) => {
+  if (filter === 'all') return 'Todos';
+  if (filter === 'near') return 'Próximos';
+  if (filter === 'finished') return 'Encerrados';
+  if (filter === 'future') return 'Futuros';
+  return '';
+};
+
 function App() {
   // Authentication & session
   const [user, setUser] = useState(() => {
@@ -142,6 +157,12 @@ function App() {
   const [activeTab, setActiveTab] = useState('matches');
   const [matches, setMatches] = useState([]);
   const [ranking, setRanking] = useState([]);
+  const [matchesLoaded, setMatchesLoaded] = useState(false);
+  const [rankingLoaded, setRankingLoaded] = useState(false);
+  const [guessFilter, setGuessFilter] = useState('all'); // 'all', 'guessed', 'missing'
+  const [timeFilter, setTimeFilter] = useState('all'); // 'all', 'near', 'finished', 'future'
+  const [guessDropdownOpen, setGuessDropdownOpen] = useState(false);
+  const [timeDropdownOpen, setTimeDropdownOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -170,6 +191,18 @@ function App() {
     }
   }, [toast]);
 
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = (event) => {
+      if (!event.target.closest('.custom-dropdown')) {
+        setGuessDropdownOpen(false);
+        setTimeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, []);
+
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
   };
@@ -192,6 +225,7 @@ function App() {
       if (!silent) showToast('Erro de conexão ao carregar jogos.', 'error');
     } finally {
       if (!silent) setLoading(false);
+      setMatchesLoaded(true);
     }
   };
 
@@ -211,6 +245,7 @@ function App() {
       if (!silent) showToast('Erro de conexão ao carregar ranking.', 'error');
     } finally {
       if (!silent) setLoading(false);
+      setRankingLoaded(true);
     }
   };
 
@@ -267,6 +302,8 @@ function App() {
     localStorage.removeItem('bolao_user');
     setMatches([]);
     setRanking([]);
+    setMatchesLoaded(false);
+    setRankingLoaded(false);
     showToast('Sessão encerrada.');
   };
 
@@ -716,7 +753,88 @@ function App() {
               )}
             </div>
 
-            {loading && matches.length === 0 ? (
+            {/* Filter Section */}
+            <div className="filters-dropdown-row">
+              {/* Dropdown 1: Palpites */}
+              <div className="custom-dropdown">
+                <button 
+                  className="dropdown-trigger" 
+                  onClick={() => {
+                    setGuessDropdownOpen(!guessDropdownOpen);
+                    setTimeDropdownOpen(false);
+                  }}
+                >
+                  <span>Palpites: <strong>{getGuessFilterLabel(guessFilter)}</strong></span>
+                  <ChevronDown size={16} className={`dropdown-arrow ${guessDropdownOpen ? 'open' : ''}`} />
+                </button>
+                {guessDropdownOpen && (
+                  <div className="dropdown-menu glass-panel">
+                    <button 
+                      className={`dropdown-item ${guessFilter === 'all' ? 'active' : ''}`}
+                      onClick={() => { setGuessFilter('all'); setGuessDropdownOpen(false); }}
+                    >
+                      Todos os Jogos
+                    </button>
+                    <button 
+                      className={`dropdown-item ${guessFilter === 'guessed' ? 'active' : ''}`}
+                      onClick={() => { setGuessFilter('guessed'); setGuessDropdownOpen(false); }}
+                    >
+                      ✍️ Jogos Palpitados
+                    </button>
+                    <button 
+                      className={`dropdown-item ${guessFilter === 'missing' ? 'active' : ''}`}
+                      onClick={() => { setGuessFilter('missing'); setGuessDropdownOpen(false); }}
+                    >
+                      ⏳ Jogos Sem Palpite
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Dropdown 2: Período */}
+              <div className="custom-dropdown">
+                <button 
+                  className="dropdown-trigger" 
+                  onClick={() => {
+                    setTimeDropdownOpen(!timeDropdownOpen);
+                    setGuessDropdownOpen(false);
+                  }}
+                >
+                  <span>Período: <strong>{getTimeFilterLabel(timeFilter)}</strong></span>
+                  <ChevronDown size={16} className={`dropdown-arrow ${timeDropdownOpen ? 'open' : ''}`} />
+                </button>
+                {timeDropdownOpen && (
+                  <div className="dropdown-menu glass-panel">
+                    <button 
+                      className={`dropdown-item ${timeFilter === 'all' ? 'active' : ''}`}
+                      onClick={() => { setTimeFilter('all'); setTimeDropdownOpen(false); }}
+                    >
+                      Todos os Períodos
+                    </button>
+                    <button 
+                      className={`dropdown-item ${timeFilter === 'near' ? 'active' : ''}`}
+                      onClick={() => { setTimeFilter('near'); setTimeDropdownOpen(false); }}
+                    >
+                      ⚡ Jogos Próximos
+                    </button>
+                    <button 
+                      className={`dropdown-item ${timeFilter === 'finished' ? 'active' : ''}`}
+                      onClick={() => { setTimeFilter('finished'); setTimeDropdownOpen(false); }}
+                    >
+                      🏁 Jogos Encerrados
+                    </button>
+                    <button 
+                      className={`dropdown-item ${timeFilter === 'future' ? 'active' : ''}`}
+                      onClick={() => { setTimeFilter('future'); setTimeDropdownOpen(false); }}
+                    >
+                      🔮 Jogos Futuros
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {!matchesLoaded ? (
               <div className="loading-box glass-panel">
                 <RefreshCw className="animate-spin" size={32} style={{ color: 'var(--color-primary)' }} />
                 <p>Carregando partidas...</p>
@@ -727,175 +845,236 @@ function App() {
                 <h3>Nenhum jogo cadastrado</h3>
                 <p>O organizador do bolão ainda não cadastrou nenhuma partida.</p>
               </div>
-            ) : (
-              <div className="matches-grid">
-                {matches.map(match => {
-                  const hasStarted = new Date(match.date) < new Date() || match.status === 'live';
-                  const isFinished = match.status === 'finished';
-                  
-                  return (
-                    <div 
-                      key={match.id} 
-                      className="match-card glass-panel" 
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => setActiveMatchDetails(match)}
-                    >
-                      <div className="match-header">
-                        <span>{formatDate(match.date)}</span>
-                        <span className={`match-badge ${match.status}`}>
-                          {isFinished ? 'Encerrado' : match.status === 'live' ? '• AO VIVO' : 'Aberto'}
-                        </span>
-                      </div>
+            ) : (() => {
+              // Calculate filtered and sorted matches inside a self-invoking function
+              const sorted = [...matches].sort((a, b) => new Date(a.date) - new Date(b.date));
+              const now = new Date();
+              const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+              const sevenDaysFromNow = new Date(todayStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+              
+              // Apply time filter
+              let filtered = sorted;
+              if (timeFilter === 'near') {
+                filtered = sorted.filter(match => {
+                  const matchDate = new Date(match.date);
+                  return match.status === 'live' || (
+                    match.status !== 'finished' && 
+                    matchDate <= sevenDaysFromNow
+                  );
+                });
+              } else if (timeFilter === 'finished') {
+                filtered = sorted.filter(match => match.status === 'finished');
+              } else if (timeFilter === 'future') {
+                filtered = sorted.filter(match => {
+                  const matchDate = new Date(match.date);
+                  return match.status !== 'finished' && 
+                         match.status !== 'live' && 
+                         matchDate > sevenDaysFromNow;
+                });
+              }
 
-                      <div className="match-teams">
-                        <div className="team">
-                          {renderTeamFlag(match.teamA, "team-flag")}
-                          <span className="team-name" title={match.teamA}>{match.teamA}</span>
+              // Apply guess filter in combination
+              if (guessFilter === 'guessed') {
+                filtered = filtered.filter(match => match.userGuess !== null && match.userGuess !== undefined);
+              } else if (guessFilter === 'missing') {
+                filtered = filtered.filter(match => !match.userGuess);
+              }
+
+              if (filtered.length === 0) {
+                return (
+                  <div className="empty-box glass-panel">
+                    <span className="empty-box-icon">🔍</span>
+                    <h3>Nenhum jogo encontrado</h3>
+                    <p>
+                      Não encontramos nenhuma partida correspondente aos filtros selecionados.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="matches-grid">
+                  {filtered.map(match => {
+                    const hasStarted = new Date(match.date) < new Date() || match.status === 'live';
+                    const isFinished = match.status === 'finished';
+                    
+                    return (
+                      <div 
+                        key={match.id} 
+                        className="match-card glass-panel" 
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => setActiveMatchDetails(match)}
+                      >
+                        <div className="match-header">
+                          <span>{formatDate(match.date)}</span>
+                          <span className={`match-badge ${match.status}`}>
+                            {isFinished ? 'Encerrado' : match.status === 'live' ? '• AO VIVO' : 'Aberto'}
+                          </span>
                         </div>
 
-                        <div className="match-vs-score">
-                          <span className="vs-text">VS</span>
-                          {isFinished || match.status === 'live' ? (
-                            <div className="score-display">
-                              <span className="score-number" style={match.status === 'live' ? { borderColor: 'rgba(239, 68, 68, 0.4)', color: '#ef4444' } : {}}>{match.scoreA}</span>
-                              <span className="score-dash">-</span>
-                              <span className="score-number" style={match.status === 'live' ? { borderColor: 'rgba(239, 68, 68, 0.4)', color: '#ef4444' } : {}}>{match.scoreB}</span>
-                            </div>
-                          ) : (
-                            <div className="score-display" style={{ opacity: 0.5 }}>
-                              <span className="score-number">?</span>
-                              <span className="score-dash">-</span>
-                              <span className="score-number">?</span>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="team">
-                          {renderTeamFlag(match.teamB, "team-flag")}
-                          <span className="team-name" title={match.teamB}>{match.teamB}</span>
-                        </div>
-                      </div>
-
-                      <div className="match-footer">
-                        {/* Current User's Guess info */}
-                        {match.userGuess ? (
-                          <div className="user-guess-box">
-                            <span className="guess-label">Seu palpite:</span>
-                            <span className="guess-value">{match.userGuess.scoreA} x {match.userGuess.scoreB}</span>
-                            {isFinished && (
-                              <span className="guess-points">
-                                +{match.userGuess.points} pts
-                              </span>
-                            )}
+                        <div className="match-teams">
+                          <div className="team">
+                            {renderTeamFlag(match.teamA, "team-flag")}
+                            <span className="team-name" title={match.teamA}>{match.teamA}</span>
                           </div>
-                        ) : (
-                          !hasStarted && (
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setGuessModal({ isOpen: true, match });
-                                setGuessForm({ scoreA: '', scoreB: '' });
-                              }}
-                              className="btn btn-primary"
-                              style={{ width: '100%' }}
-                            >
-                              Dar Palpite
-                            </button>
-                          )
-                        )}
 
-                        {/* Allow admin to set result */}
-                        {user.role === 'admin' && !isFinished && (
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setResultModal({ isOpen: true, match });
-                              setResultForm({ scoreA: '', scoreB: '' });
-                            }}
-                            className="btn btn-secondary"
-                            style={{ width: '100%' }}
-                          >
-                            Inserir Placar Oficial
-                          </button>
-                        )}
-
-                        {/* Edit guess if still open */}
-                        {match.userGuess && !hasStarted && (
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setGuessModal({ isOpen: true, match });
-                              setGuessForm({ scoreA: match.userGuess.scoreA.toString(), scoreB: match.userGuess.scoreB.toString() });
-                            }}
-                            className="btn btn-secondary"
-                            style={{ width: '100%' }}
-                          >
-                            Alterar Palpite
-                          </button>
-                        )}
-
-                        {/* Show indicator if match started and guess is missing */}
-                        {!match.userGuess && hasStarted && (
-                          <div className="user-guess-box" style={{ borderColor: 'var(--color-danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
-                            <span className="guess-label" style={{ color: 'var(--color-danger)' }}>Você não palpitou a tempo</span>
-                          </div>
-                        )}
-
-                        {/* Allow admin to place guess on behalf of others */}
-                        {user.role === 'admin' && (
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setAdminGuessModal({ isOpen: true, match });
-                              setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
-                            }}
-                            className="btn btn-secondary"
-                            style={{ width: '100%', marginTop: '4px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
-                          >
-                            Palpitar por Outro
-                          </button>
-                        )}
-
-                        {/* Expandable list of guesses for other players (only if match started/locked) */}
-                        {hasStarted && match.otherGuesses && match.otherGuesses.length > 0 && (
-                          <div className="guesses-collapse" onClick={(e) => e.stopPropagation()}>
-                            <button 
-                              className="guesses-collapse-btn" 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleGuessesExpand(match.id);
-                              }}
-                            >
-                              {expandedGuesses[match.id] ? (
-                                <>Ocultar palpites da galera <ChevronUp size={12} /></>
-                              ) : (
-                                <>Ver palpites da galera ({match.otherGuesses.length}) <ChevronDown size={12} /></>
-                              )}
-                            </button>
-                            
-                            {expandedGuesses[match.id] && (
-                              <div className="guesses-collapse-list">
-                                {match.otherGuesses.map((g, idx) => (
-                                  <div key={idx} className="guess-list-item">
-                                    <span className="guess-list-name">{g.userName}</span>
-                                    <div>
-                                      <span className="guess-list-score">{g.scoreA} x {g.scoreB}</span>
-                                      {isFinished && (
-                                        <span className="guess-list-points"> (+{g.points} pts)</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
+                          <div className="match-vs-score">
+                            <span className="vs-text">VS</span>
+                            {isFinished || match.status === 'live' ? (
+                              <div className="score-display">
+                                <span className="score-number" style={match.status === 'live' ? { borderColor: 'rgba(239, 68, 68, 0.4)', color: '#ef4444' } : {}}>{match.scoreA}</span>
+                                <span className="score-dash">-</span>
+                                <span className="score-number" style={match.status === 'live' ? { borderColor: 'rgba(239, 68, 68, 0.4)', color: '#ef4444' } : {}}>{match.scoreB}</span>
+                              </div>
+                            ) : (
+                              <div className="score-display" style={{ opacity: 0.5 }}>
+                                <span className="score-number">?</span>
+                                <span className="score-dash">-</span>
+                                <span className="score-number">?</span>
                               </div>
                             )}
                           </div>
-                        )}
+
+                          <div className="team">
+                            {renderTeamFlag(match.teamB, "team-flag")}
+                            <span className="team-name" title={match.teamB}>{match.teamB}</span>
+                          </div>
+                        </div>
+
+                        <div className="match-footer">
+                          {/* Current User's Guess info */}
+                          {match.userGuess ? (
+                            <div className="user-guess-box">
+                              <span className="guess-label">Seu palpite:</span>
+                              <span className="guess-value">{match.userGuess.scoreA} x {match.userGuess.scoreB}</span>
+                              {isFinished && (
+                                <span className="guess-points">
+                                  +{match.userGuess.points} pts
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            !hasStarted && (
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setGuessModal({ isOpen: true, match });
+                                  setGuessForm({ scoreA: '', scoreB: '' });
+                                }}
+                                className="btn btn-primary"
+                                style={{ width: '100%' }}
+                              >
+                                Dar Palpite
+                              </button>
+                            )
+                          )}
+
+                          {/* Allow admin to set result */}
+                          {user.role === 'admin' && !isFinished && (
+                            <button 
+                              onClick={(e) => {
+                                  e.stopPropagation();
+                                  setResultModal({ isOpen: true, match });
+                                  setResultForm({ scoreA: '', scoreB: '' });
+                              }}
+                              className="btn btn-secondary"
+                              style={{ width: '100%' }}
+                            >
+                              Inserir Placar Oficial
+                            </button>
+                          )}
+
+                          {/* Edit guess if still open */}
+                          {match.userGuess && !hasStarted && (
+                            <button 
+                              onClick={(e) => {
+                                  e.stopPropagation();
+                                  setGuessModal({ isOpen: true, match });
+                                  setGuessForm({ scoreA: match.userGuess.scoreA.toString(), scoreB: match.userGuess.scoreB.toString() });
+                              }}
+                              className="btn btn-secondary"
+                              style={{ width: '100%' }}
+                            >
+                              Alterar Palpite
+                            </button>
+                          )}
+
+                          {/* Show indicator if match started and guess is missing */}
+                          {!match.userGuess && hasStarted && (
+                            <div className="user-guess-box" style={{ borderColor: 'var(--color-danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
+                              <span className="guess-label" style={{ color: 'var(--color-danger)' }}>Você não palpitou a tempo</span>
+                            </div>
+                          )}
+
+                          {/* Allow admin to place guess on behalf of others */}
+                          {user.role === 'admin' && (
+                            <button 
+                              onClick={(e) => {
+                                  e.stopPropagation();
+                                  setAdminGuessModal({ isOpen: true, match });
+                                  setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
+                              }}
+                              className="btn btn-secondary"
+                              style={{ width: '100%', marginTop: '4px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
+                            >
+                              Palpitar por Outro
+                            </button>
+                          )}
+
+                          {/* Expandable list of guesses for other players (only if match started/locked) */}
+                          {hasStarted && match.otherGuesses && match.otherGuesses.length > 0 && (
+                            <div className="guesses-collapse" onClick={(e) => e.stopPropagation()}>
+                              <button 
+                                className="guesses-collapse-btn" 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleGuessesExpand(match.id);
+                                }}
+                              >
+                                {expandedGuesses[match.id] ? (
+                                  <>Ocultar palpites da galera <ChevronUp size={12} /></>
+                                ) : (
+                                  <>Ver palpites da galera ({match.otherGuesses.length}) <ChevronDown size={12} /></>
+                                )}
+                              </button>
+                              
+                              {expandedGuesses[match.id] && (
+                                <div className="guesses-collapse-list">
+                                  {match.otherGuesses.map((g, idx) => (
+                                    <div key={idx} className="guess-list-item">
+                                      <span className="guess-list-name">{g.userName}</span>
+                                      <div>
+                                        <span className="guess-list-score">{g.scoreA} x {g.scoreB}</span>
+                                        {isFinished && (
+                                          <span className="guess-list-points"> (+{g.points} pts)</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* Indicador de palpite no canto inferior direito */}
+                        <div className="card-guess-indicator">
+                          {match.userGuess ? (
+                            <span className="indicator-badge guessed" title="Você já deu seu palpite!">✓ Palpitado</span>
+                          ) : (
+                            hasStarted ? (
+                              <span className="indicator-badge missed" title="Você não palpitou a tempo">❌ Sem palpite</span>
+                            ) : (
+                              <span className="indicator-badge pending" title="Você ainda não palpitou!">⏳ Sem palpite</span>
+                            )
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -909,7 +1088,7 @@ function App() {
               </button>
             </div>
 
-            {loading && ranking.length === 0 ? (
+            {!rankingLoaded ? (
               <div className="loading-box glass-panel">
                 <RefreshCw className="animate-spin" size={32} style={{ color: 'var(--color-primary)' }} />
                 <p>Carregando classificação...</p>
