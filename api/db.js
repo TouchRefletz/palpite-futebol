@@ -1,10 +1,36 @@
 import { createClient } from '@vercel/kv';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Load .env file manually if it exists
+try {
+  const envPath = path.join(__dirname, '../.env');
+  if (fsSync.existsSync(envPath)) {
+    const envConfig = fsSync.readFileSync(envPath, 'utf-8');
+    envConfig.split('\n').forEach(line => {
+      const parts = line.split('=');
+      if (parts.length >= 2) {
+        const key = parts[0].trim();
+        let val = parts.slice(1).join('=').trim();
+        // Remove quotes if present
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.substring(1, val.length - 1);
+        }
+        if (key && !process.env[key]) {
+          process.env[key] = val;
+        }
+      }
+    });
+    console.log('Loaded environment variables from local .env file.');
+  }
+} catch (e) {
+  console.error('Failed to load local .env file:', e);
+}
 
 let kv;
 if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {

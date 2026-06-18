@@ -363,7 +363,7 @@ app.post('/api/matches', async (req, res) => {
 
 // 4. Registrar palpite
 app.post('/api/guesses', async (req, res) => {
-  const { userName, matchId, scoreA, scoreB } = req.body;
+  const { userName, matchId, scoreA, scoreB, requesterRole } = req.body;
 
   if (!userName || !matchId || scoreA === undefined || scoreB === undefined) {
     return res.status(400).json({ error: 'Palpite incompleto.' });
@@ -379,7 +379,7 @@ app.post('/api/guesses', async (req, res) => {
 
     // Check if match already started
     const isLocked = match.status === 'finished' || new Date(match.date) < new Date();
-    if (isLocked) {
+    if (isLocked && requesterRole !== 'admin') {
       return res.status(400).json({ error: 'As apostas para este jogo já estão encerradas.' });
     }
 
@@ -401,6 +401,13 @@ app.post('/api/guesses', async (req, res) => {
         createdAt: new Date().toISOString()
       };
       db.guesses.push(guess);
+    }
+
+    // Se o jogo já acabou, calcula os pontos do palpite imediatamente
+    if (match.status === 'finished') {
+      guess.points = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
+    } else {
+      guess.points = null;
     }
 
     await saveData(db);

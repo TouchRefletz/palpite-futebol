@@ -150,11 +150,13 @@ function App() {
   const [guessModal, setGuessModal] = useState({ isOpen: false, match: null });
   const [resultModal, setResultModal] = useState({ isOpen: false, match: null });
   const [newMatchModal, setNewMatchModal] = useState(false);
+  const [adminGuessModal, setAdminGuessModal] = useState({ isOpen: false, match: null });
   
   // Forms state
   const [guessForm, setGuessForm] = useState({ scoreA: '', scoreB: '' });
   const [resultForm, setResultForm] = useState({ scoreA: '', scoreB: '' });
   const [newMatchForm, setNewMatchForm] = useState({ teamA: '', teamB: '', date: '' });
+  const [adminGuessForm, setAdminGuessForm] = useState({ userName: '', scoreA: '', scoreB: '' });
   
   // Toggle visible guesses for finished matches
   const [expandedGuesses, setExpandedGuesses] = useState({});
@@ -295,6 +297,50 @@ function App() {
         setGuessModal({ isOpen: false, match: null });
         setGuessForm({ scoreA: '', scoreB: '' });
         fetchMatches();
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Erro ao registrar palpite.', 'error');
+      }
+    } catch (e) {
+      showToast('Erro de rede ao salvar palpite.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Submit Admin Guess on behalf of another user
+  const handleAdminGuessSubmit = async (e) => {
+    e.preventDefault();
+    const { userName, scoreA, scoreB } = adminGuessForm;
+    if (!userName.trim()) {
+      showToast('Selecione o participante!', 'error');
+      return;
+    }
+    if (scoreA === '' || scoreB === '') {
+      showToast('Insira o placar do palpite!', 'error');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/guesses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userName: userName.trim(),
+          matchId: adminGuessModal.match.id,
+          scoreA,
+          scoreB,
+          requesterRole: 'admin'
+        })
+      });
+
+      if (res.ok) {
+        showToast(`Palpite para ${userName} registrado com sucesso!`);
+        setAdminGuessModal({ isOpen: false, match: null });
+        setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
+        fetchMatches();
+        fetchRanking();
       } else {
         const data = await res.json();
         showToast(data.error || 'Erro ao registrar palpite.', 'error');
@@ -795,6 +841,21 @@ function App() {
                           </div>
                         )}
 
+                        {/* Allow admin to place guess on behalf of others */}
+                        {user.role === 'admin' && (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAdminGuessModal({ isOpen: true, match });
+                              setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
+                            }}
+                            className="btn btn-secondary"
+                            style={{ width: '100%', marginTop: '4px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
+                          >
+                            Palpitar por Outro
+                          </button>
+                        )}
+
                         {/* Expandable list of guesses for other players (only if match started/locked) */}
                         {hasStarted && match.otherGuesses && match.otherGuesses.length > 0 && (
                           <div className="guesses-collapse" onClick={(e) => e.stopPropagation()}>
@@ -1169,6 +1230,91 @@ function App() {
         </div>
       )}
 
+      {/* MODAL: Place Guess for Another User (Admin only) */}
+      {adminGuessModal.isOpen && user.role === 'admin' && (
+        <div className="modal-overlay" onClick={() => setAdminGuessModal({ isOpen: false, match: null })}>
+          <div className="modal-content glass-panel" onClick={e => e.stopPropagation()}>
+            <h3 className="modal-title" style={{ fontSize: '18px', fontWeight: '800', marginBottom: '8px' }}>Palpitar por outro participante</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '12px', marginBottom: '16px', textAlign: 'center' }}>
+              Como organizador, você pode registrar ou editar o palpite de qualquer pessoa a qualquer momento.
+            </p>
+            
+            <form onSubmit={handleAdminGuessSubmit}>
+              <div className="form-group" style={{ marginBottom: '20px' }}>
+                <label className="form-label" htmlFor="admin-guess-user">Selecionar Participante</label>
+                <select 
+                  id="admin-guess-user"
+                  className="form-input" 
+                  required
+                  value={adminGuessForm.userName}
+                  onChange={e => setAdminGuessForm(prev => ({ ...prev, userName: e.target.value }))}
+                  style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}
+                >
+                  <option value="">-- Selecione o participante --</option>
+                  {ranking.map(r => (
+                    <option key={r.userId} value={r.userName}>{r.userName}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '24px', marginBottom: '16px' }}>
+                <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  {renderTeamFlag(adminGuessModal.match.teamA, "modal-team-flag")}
+                  <div style={{ fontWeight: '700', fontSize: '14px', marginTop: '8px' }}>{adminGuessModal.match.teamA}</div>
+                </div>
+                <span style={{ color: 'var(--text-muted)', fontWeight: '800' }}>VS</span>
+                <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  {renderTeamFlag(adminGuessModal.match.teamB, "modal-team-flag")}
+                  <div style={{ fontWeight: '700', fontSize: '14px', marginTop: '8px' }}>{adminGuessModal.match.teamB}</div>
+                </div>
+              </div>
+
+              <div className="form-row-guess">
+                <div className="guess-input-container">
+                  <span className="guess-input-label">{adminGuessModal.match.teamA}</span>
+                  <input 
+                    type="number" 
+                    min="0"
+                    className="form-input form-input-number" 
+                    required 
+                    value={adminGuessForm.scoreA}
+                    onChange={e => setAdminGuessForm(prev => ({ ...prev, scoreA: e.target.value }))}
+                  />
+                </div>
+                
+                <span className="guess-separator">x</span>
+
+                <div className="guess-input-container">
+                  <span className="guess-input-label">{adminGuessModal.match.teamB}</span>
+                  <input 
+                    type="number" 
+                    min="0"
+                    className="form-input form-input-number" 
+                    required 
+                    value={adminGuessForm.scoreB}
+                    onChange={e => setAdminGuessForm(prev => ({ ...prev, scoreB: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={loading}>
+                  Confirmar Palpite
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => setAdminGuessModal({ isOpen: false, match: null })} 
+                  className="btn btn-secondary"
+                  disabled={loading}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: Set Match Result (Admin only) */}
       {resultModal.isOpen && (
         <div className="modal-overlay" onClick={() => setResultModal({ isOpen: false, match: null })}>
@@ -1424,6 +1570,19 @@ function App() {
                     <p style={{ color: 'var(--color-danger)', fontSize: '13px', fontWeight: '700' }}>Você não palpitou a tempo para este jogo.</p>
                   )}
                 </div>
+              )}
+              {user.role === 'admin' && (
+                <button 
+                  onClick={() => {
+                    setAdminGuessModal({ isOpen: true, match: activeMatchDetails });
+                    setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
+                    setActiveMatchDetails(null);
+                  }}
+                  className="btn btn-secondary"
+                  style={{ width: '100%', marginTop: '10px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
+                >
+                  Palpitar por Outro
+                </button>
               )}
             </div>
 
