@@ -16,7 +16,9 @@ import {
   Upload,
   Info,
   Clock,
-  Sparkles
+  Sparkles,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 // Team emoji auto-mapper (legacy fallback)
@@ -163,6 +165,11 @@ function App() {
   const [timeFilter, setTimeFilter] = useState('all'); // 'all', 'near', 'finished', 'future'
   const [guessDropdownOpen, setGuessDropdownOpen] = useState(false);
   const [timeDropdownOpen, setTimeDropdownOpen] = useState(false);
+  const [viewMode, setViewMode] = useState(() => {
+    const savedUser = localStorage.getItem('bolao_user');
+    const parsed = savedUser ? JSON.parse(savedUser) : null;
+    return parsed?.role === 'admin' ? 'admin' : 'player';
+  });
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -284,6 +291,7 @@ function App() {
 
       if (res.ok) {
         setUser(data);
+        setViewMode(data.role === 'admin' ? 'admin' : 'player');
         localStorage.setItem('bolao_user', JSON.stringify(data));
         showToast(`Bem-vindo, ${data.name}!`);
       } else {
@@ -304,6 +312,7 @@ function App() {
     setRanking([]);
     setMatchesLoaded(false);
     setRankingLoaded(false);
+    setViewMode('player');
     showToast('Sessão encerrada.');
   };
 
@@ -671,10 +680,28 @@ function App() {
             <div className="user-badge">
               <User size={16} style={{ color: 'var(--text-secondary)' }} />
               <span className="user-badge-name">{user.name}</span>
-              <span className={`user-badge-role ${user.role}`}>
-                {user.role === 'admin' ? 'Organizador' : 'Participante'}
+              <span className={`user-badge-role ${viewMode}`}>
+                {user.role === 'admin' ? (viewMode === 'admin' ? 'Organizador' : 'Org (Jogador)') : 'Participante'}
               </span>
             </div>
+            
+            {user.role === 'admin' && (
+              <button 
+                onClick={() => {
+                  const newMode = viewMode === 'admin' ? 'player' : 'admin';
+                  setViewMode(newMode);
+                  if (newMode === 'player' && activeTab === 'admin') {
+                    setActiveTab('matches');
+                  }
+                  showToast(`Visualização alterada para o modo ${newMode === 'admin' ? 'Organizador' : 'Jogador'}.`);
+                }}
+                className="btn btn-secondary btn-icon-only"
+                title={viewMode === 'admin' ? "Visualizar como Jogador" : "Visualizar como Organizador"}
+              >
+                {viewMode === 'admin' ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            )}
+
             <button onClick={handleLogout} className="btn btn-secondary btn-icon-only" title="Sair">
               <LogOut size={16} />
             </button>
@@ -710,7 +737,7 @@ function App() {
             Regras de Pontos
           </button>
           
-          {user.role === 'admin' && (
+          {user.role === 'admin' && viewMode === 'admin' && (
             <button 
               className={`tab-btn ${activeTab === 'admin' ? 'active' : ''}`}
               onClick={() => setActiveTab('admin')}
@@ -746,7 +773,7 @@ function App() {
                   </span>
                 )}
               </div>
-              {user.role === 'admin' && (
+              {user.role === 'admin' && viewMode === 'admin' && (
                 <button onClick={() => setNewMatchModal(true)} className="btn btn-primary">
                   <Plus size={16} /> Novo Jogo
                 </button>
@@ -970,7 +997,7 @@ function App() {
                           )}
 
                           {/* Allow admin to set result */}
-                          {user.role === 'admin' && !isFinished && (
+                          {user.role === 'admin' && viewMode === 'admin' && !isFinished && (
                             <button 
                               onClick={(e) => {
                                   e.stopPropagation();
@@ -1007,7 +1034,7 @@ function App() {
                           )}
 
                           {/* Allow admin to place guess on behalf of others */}
-                          {user.role === 'admin' && (
+                          {user.role === 'admin' && viewMode === 'admin' && (
                             <button 
                               onClick={(e) => {
                                   e.stopPropagation();
@@ -1238,7 +1265,7 @@ function App() {
         )}
 
         {/* Tab 4: Admin Panel (Only for admins) */}
-        {activeTab === 'admin' && user.role === 'admin' && (
+        {activeTab === 'admin' && user.role === 'admin' && viewMode === 'admin' && (
           <div style={{ maxWidth: '600px', margin: '0 auto' }}>
             <div className="admin-config-card glass-panel">
               <h3 className="admin-config-title">Painel de Administração do Bolão</h3>
@@ -1410,7 +1437,7 @@ function App() {
       )}
 
       {/* MODAL: Place Guess for Another User (Admin only) */}
-      {adminGuessModal.isOpen && user.role === 'admin' && (
+      {adminGuessModal.isOpen && user.role === 'admin' && viewMode === 'admin' && (
         <div className="modal-overlay" onClick={() => setAdminGuessModal({ isOpen: false, match: null })}>
           <div className="modal-content glass-panel" onClick={e => e.stopPropagation()}>
             <h3 className="modal-title" style={{ fontSize: '18px', fontWeight: '800', marginBottom: '8px' }}>Palpitar por outro participante</h3>
@@ -1750,7 +1777,7 @@ function App() {
                   )}
                 </div>
               )}
-              {user.role === 'admin' && (
+              {user.role === 'admin' && viewMode === 'admin' && (
                 <button 
                   onClick={() => {
                     setAdminGuessModal({ isOpen: true, match: activeMatchDetails });
