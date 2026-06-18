@@ -12,6 +12,16 @@ const generateId = () => Math.random().toString(36).substring(2, 11);
 
 // Scoring function
 function calculatePoints(guessA, guessB, resultA, resultB) {
+  // If either the guess or the result contains null/undefined/NaN, no points can be computed yet
+  if (
+    guessA === null || guessA === undefined || isNaN(guessA) ||
+    guessB === null || guessB === undefined || isNaN(guessB) ||
+    resultA === null || resultA === undefined || isNaN(resultA) ||
+    resultB === null || resultB === undefined || isNaN(resultB)
+  ) {
+    return 0;
+  }
+
   // 1. Exact score (Placar Exato)
   if (guessA === resultA && guessB === resultB) {
     return 25;
@@ -478,6 +488,7 @@ app.get('/api/ranking', async (req, res) => {
     const ranking = users.map(user => {
       const userGuesses = guesses.filter(g => g.userName.toLowerCase() === user.name.toLowerCase() && g.points !== null);
       
+      const pointsAdjustment = parseInt(user.pointsAdjustment) || 0;
       const totalPoints = userGuesses.reduce((sum, g) => sum + g.points, 0);
       const exactScores = userGuesses.filter(g => g.points === 25).length;
       const winnerDiff = userGuesses.filter(g => g.points === 18).length;
@@ -508,8 +519,8 @@ app.get('/api/ranking', async (req, res) => {
       return {
         userId: user.id,
         userName: user.name,
-        totalPoints,
-        projectedPoints: totalPoints + livePoints,
+        totalPoints: totalPoints + pointsAdjustment,
+        projectedPoints: totalPoints + pointsAdjustment + livePoints,
         exactScores,
         winnerDiff,
         winnerGoals,
@@ -518,7 +529,8 @@ app.get('/api/ranking', async (req, res) => {
         projectedWinnerDiff: winnerDiff + projectedWinnerDiff,
         projectedWinnerGoals: winnerGoals + projectedWinnerGoals,
         projectedWinnerOnly: winnerOnly + projectedWinnerOnly,
-        totalGuesses
+        totalGuesses,
+        pointsAdjustment
       };
     });
 
@@ -537,6 +549,77 @@ app.get('/api/ranking', async (req, res) => {
   } catch (error) {
     console.error('Error fetching ranking:', error);
     res.status(500).json({ error: 'Erro ao buscar ranking.' });
+  }
+});
+
+// 6.1 Ajustar Pontuação Manualmente (Admin)
+app.post('/api/users/adjust-points', async (req, res) => {
+  const { userId, pointsAdjustment, requesterRole } = req.body;
+
+  if (requesterRole !== 'admin') {
+    return res.status(403).json({ error: 'Apenas administradores podem ajustar pontuações.' });
+  }
+
+  if (userId === undefined || pointsAdjustment === undefined) {
+    return res.status(400).json({ error: 'Dados incompletos para ajuste de pontos.' });
+  }
+
+  try {
+    const db = await getData();
+    const user = db.users.find(u => u.id === userId);
+
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    user.pointsAdjustment = parseInt(pointsAdjustment) || 0;
+    await saveData(db);
+    res.json({ message: 'Pontuação ajustada com sucesso!', user });
+  } catch (error) {
+    console.error('Error adjusting points:', error);
+    res.status(500).json({ error: 'Erro ao ajustar pontuação.' });
+  }
+});
+
+// 6.2 Recalcular Todos os Pontos do Bolão (Admin)
+app.post('/api/admin/recalculate', async (req, res) => {
+  const { requesterRole } = req.body;
+
+  if (requesterRole !== 'admin') {
+    return res.status(403).json({ error: 'Apenas administradores podem recalcular os pontos.' });
+  }
+
+  try {
+    const db = await getData();
+    let count = 0;
+
+    db.guesses = db.guesses.map(guess => {
+      const match = db.matches.find(m => m.id === guess.matchId);
+      if (!match) {
+        return guess;
+      }
+
+      if (match.status === 'finished') {
+        const points = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
+        if (guess.points !== points) {
+          count++;
+        }
+        return { ...guess, points };
+      } else {
+        // Para jogos não encerrados, a pontuação oficial deve ser nula
+        const oldPoints = guess.points;
+        if (oldPoints !== null) {
+          count++;
+        }
+        return { ...guess, points: null };
+      }
+    });
+
+    await saveData(db);
+    res.json({ message: `Recálculo concluído com sucesso! ${count} palpites atualizados.` });
+  } catch (error) {
+    console.error('Error recalculating points:', error);
+    res.status(500).json({ error: 'Erro ao recalcular pontos.' });
   }
 });
 

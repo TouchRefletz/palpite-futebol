@@ -180,12 +180,15 @@ function App() {
   const [resultModal, setResultModal] = useState({ isOpen: false, match: null });
   const [newMatchModal, setNewMatchModal] = useState(false);
   const [adminGuessModal, setAdminGuessModal] = useState({ isOpen: false, match: null });
+  const [adjustmentModalOpen, setAdjustmentModalOpen] = useState(false);
+  const [selectedUserForAdjustment, setSelectedUserForAdjustment] = useState(null);
   
   // Forms state
   const [guessForm, setGuessForm] = useState({ scoreA: '', scoreB: '' });
   const [resultForm, setResultForm] = useState({ scoreA: '', scoreB: '' });
   const [newMatchForm, setNewMatchForm] = useState({ teamA: '', teamB: '', date: '' });
   const [adminGuessForm, setAdminGuessForm] = useState({ userName: '', scoreA: '', scoreB: '' });
+  const [adjustmentForm, setAdjustmentForm] = useState({ pointsAdjustment: 0 });
   
   // Toggle visible guesses for finished matches
   const [expandedGuesses, setExpandedGuesses] = useState({});
@@ -471,6 +474,71 @@ function App() {
       }
     } catch (e) {
       showToast('Erro de rede ao criar jogo.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Adjust User Points (Admin)
+  const handleAdjustmentSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedUserForAdjustment) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/users/adjust-points', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: selectedUserForAdjustment.userId,
+          pointsAdjustment: parseInt(adjustmentForm.pointsAdjustment) || 0,
+          requesterRole: user.role
+        })
+      });
+
+      if (res.ok) {
+        showToast(`Pontuação de ${selectedUserForAdjustment.userName} ajustada com sucesso!`);
+        setAdjustmentModalOpen(false);
+        setSelectedUserForAdjustment(null);
+        fetchRanking();
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Erro ao ajustar pontuação.', 'error');
+      }
+    } catch (e) {
+      showToast('Erro de rede ao ajustar pontuação.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Recalculate All Points (Admin)
+  const handleRecalculatePoints = async () => {
+    if (!window.confirm('Deseja recalcular todos os palpites do banco de dados com base nos placares oficiais? Isso corrigirá qualquer erro ou projeção indevida.')) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/admin/recalculate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requesterRole: user.role
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        showToast(data.message || 'Pontuações recalculadas com sucesso!');
+        fetchMatches();
+        fetchRanking();
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Erro ao recalcular pontuações.', 'error');
+      }
+    } catch (e) {
+      showToast('Erro de rede ao recalcular pontuações.', 'error');
     } finally {
       setLoading(false);
     }
@@ -1231,10 +1299,52 @@ function App() {
                               {medalClass ? <span className={medalClass}>{pos}</span> : pos}
                             </td>
                             <td>
-                              <span className="ranking-name">{row.userName}</span>
-                              {row.userName.toLowerCase() === user.name.toLowerCase() && (
-                                <span style={{ fontSize: '10px', marginLeft: '6px', color: 'var(--color-primary)', fontWeight: '700', textTransform: 'uppercase' }}>Você</span>
-                              )}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span className="ranking-name">{row.userName}</span>
+                                {row.userName.toLowerCase() === user.name.toLowerCase() && (
+                                  <span style={{ fontSize: '10px', color: 'var(--color-primary)', fontWeight: '700', textTransform: 'uppercase' }}>Você</span>
+                                )}
+                                {row.pointsAdjustment !== 0 && (
+                                  <span 
+                                    style={{ 
+                                      fontSize: '10px', 
+                                      color: row.pointsAdjustment > 0 ? 'var(--color-success)' : 'var(--color-danger)', 
+                                      fontWeight: '600' 
+                                    }}
+                                    title={`Ajuste manual: ${row.pointsAdjustment > 0 ? '+' : ''}${row.pointsAdjustment} pts`}
+                                  >
+                                    ({row.pointsAdjustment > 0 ? '+' : ''}{row.pointsAdjustment} adj)
+                                  </span>
+                                )}
+                                {user.role === 'admin' && viewMode === 'admin' && (
+                                  <button
+                                    onClick={() => {
+                                      setSelectedUserForAdjustment(row);
+                                      setAdjustmentForm({ pointsAdjustment: row.pointsAdjustment || 0 });
+                                      setAdjustmentModalOpen(true);
+                                    }}
+                                    className="btn-edit-points"
+                                    title="Ajustar Pontuação Manualmente"
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: 'var(--text-muted)',
+                                      cursor: 'pointer',
+                                      padding: '2px',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      borderRadius: '4px',
+                                      transition: 'all 0.2s',
+                                      marginLeft: '4px'
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
+                                  >
+                                    <Settings size={13} />
+                                  </button>
+                                )}
+                              </div>
                             </td>
                             <td>
                               <span className="ranking-points">
@@ -1380,6 +1490,16 @@ function App() {
                   </p>
                   <button onClick={handleSimulateLive} className="btn btn-secondary" style={{ gap: '8px' }} disabled={loading}>
                     <Clock size={16} style={{ color: 'var(--color-danger)' }} /> Simular Acontecimento no Jogo
+                  </button>
+                </div>
+
+                <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
+                  <h4 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px' }}>Recalcular Todas as Pontuações</h4>
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                    Recalcula os pontos de todos os palpites com base nos placares reais das partidas terminadas. Útil para corrigir eventuais inconsistências.
+                  </p>
+                  <button onClick={handleRecalculatePoints} className="btn btn-secondary" style={{ gap: '8px' }} disabled={loading}>
+                    <RefreshCw size={16} style={{ color: 'var(--color-primary)' }} /> Recalcular Pontuações Oficialmente
                   </button>
                 </div>
 
@@ -1592,6 +1712,52 @@ function App() {
                 <button 
                   type="button" 
                   onClick={() => setAdminGuessModal({ isOpen: false, match: null })} 
+                  className="btn btn-secondary"
+                  disabled={loading}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Adjust User Points (Admin only) */}
+      {adjustmentModalOpen && selectedUserForAdjustment && user.role === 'admin' && viewMode === 'admin' && (
+        <div className="modal-overlay" onClick={() => { setAdjustmentModalOpen(false); setSelectedUserForAdjustment(null); }}>
+          <div className="modal-content glass-panel" onClick={e => e.stopPropagation()}>
+            <h3 className="modal-title" style={{ fontSize: '18px', fontWeight: '800', marginBottom: '8px' }}>Ajustar Pontuação</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '12px', marginBottom: '16px', textAlign: 'center' }}>
+              Ajuste manualmente a pontuação de <strong>{selectedUserForAdjustment.userName}</strong>.
+              Este valor será somado ou subtraído da pontuação calculada a partir dos palpites.
+            </p>
+            
+            <form onSubmit={handleAdjustmentSubmit}>
+              <div className="form-group" style={{ marginBottom: '20px' }}>
+                <label className="form-label" htmlFor="points-adjustment-input">Pontos de Ajuste (Extras ou Penalidades)</label>
+                <input 
+                  id="points-adjustment-input"
+                  type="number"
+                  className="form-input" 
+                  required 
+                  value={adjustmentForm.pointsAdjustment}
+                  onChange={e => setAdjustmentForm({ pointsAdjustment: e.target.value })}
+                  placeholder="Ex: 5 para adicionar, -5 para subtrair"
+                  style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}
+                />
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginTop: '6px' }}>
+                  Digite um número positivo para dar pontos extras (ex: 5) ou negativo para tirar (ex: -3). Use 0 para remover qualquer ajuste.
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={loading}>
+                  Salvar Ajuste
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => { setAdjustmentModalOpen(false); setSelectedUserForAdjustment(null); }} 
                   className="btn btn-secondary"
                   disabled={loading}
                 >
