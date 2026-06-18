@@ -820,6 +820,10 @@ header {
   border-left: 4px solid var(--color-danger);
 }
 
+.toast.info {
+  border-left: 4px solid var(--color-primary);
+}
+
 /* Loading/Empty State */
 .loading-box, .empty-box {
   display: flex;
@@ -1546,6 +1550,28 @@ header {
   .custom-dropdown {
     width: 100%;
   }
+}
+
+/* Live Projection Dot/Badge */
+.live-projection-dot {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 800;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  vertical-align: middle;
+  animation: pulseLiveBorder 2s infinite;
+  text-shadow: none;
+}
+
+@keyframes pulseLiveBorder {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
 }
 
 

@@ -165,6 +165,7 @@ function App() {
   const [timeFilter, setTimeFilter] = useState('all'); // 'all', 'near', 'finished', 'future'
   const [guessDropdownOpen, setGuessDropdownOpen] = useState(false);
   const [timeDropdownOpen, setTimeDropdownOpen] = useState(false);
+  const [showProjection, setShowProjection] = useState(false);
   const [viewMode, setViewMode] = useState(() => {
     const savedUser = localStorage.getItem('bolao_user');
     const parsed = savedUser ? JSON.parse(savedUser) : null;
@@ -1108,83 +1109,164 @@ function App() {
         {/* Tab 2: Leaderboard */}
         {activeTab === 'ranking' && (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-              <h2 style={{ fontSize: '20px', fontWeight: '800' }}>Tabela de Classificação</h2>
-              <button onClick={fetchRanking} className="btn btn-secondary btn-icon-only" title="Atualizar Ranking">
-                <RefreshCw size={16} />
-              </button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
+              <h2 style={{ fontSize: '20px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {showProjection ? "Projeção de Classificação" : "Tabela de Classificação"}
+                {showProjection && (
+                  <span className="live-projection-dot" style={{ margin: 0, padding: '2px 6px', fontSize: '11px', verticalAlign: 'middle' }}>
+                    Simulado
+                  </span>
+                )}
+              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <button 
+                  onClick={() => {
+                    const nextVal = !showProjection;
+                    setShowProjection(nextVal);
+                    if (nextVal && !matches.some(m => m.status === 'live')) {
+                      showToast('Nenhuma partida ao vivo no momento. A projeção exibe a pontuação atual.', 'info');
+                    }
+                  }} 
+                  className={`btn ${showProjection ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '6px', 
+                    fontSize: '12.5px', 
+                    padding: '6px 12px', 
+                    height: '36px'
+                  }}
+                  title="Ver classificação simulada com os resultados parciais das partidas ao vivo"
+                >
+                  <Sparkles size={14} className={showProjection ? "animate-pulse" : ""} />
+                  {showProjection ? "Projeção Ativa" : "Ver Projeção Ao Vivo"}
+                  {matches.some(m => m.status === 'live') && (
+                    <span 
+                      style={{ 
+                        width: '8px', 
+                        height: '8px', 
+                        borderRadius: '50%', 
+                        backgroundColor: '#ef4444', 
+                        boxShadow: '0 0 8px #ef4444',
+                        display: 'inline-block',
+                        marginLeft: '4px'
+                      }} 
+                      className="animate-pulse" 
+                      title="Partida ao vivo rolando!"
+                    />
+                  )}
+                </button>
+                <button 
+                  onClick={() => {
+                    fetchRanking();
+                    fetchMatches(true);
+                  }} 
+                  className="btn btn-secondary btn-icon-only" 
+                  title="Atualizar Classificação"
+                  style={{ height: '36px', width: '36px' }}
+                >
+                  <RefreshCw size={16} />
+                </button>
+              </div>
             </div>
 
-            {!rankingLoaded ? (
-              <div className="loading-box glass-panel">
-                <RefreshCw className="animate-spin" size={32} style={{ color: 'var(--color-primary)' }} />
-                <p>Carregando classificação...</p>
-              </div>
-            ) : ranking.length === 0 ? (
-              <div className="empty-box glass-panel">
-                <span className="empty-box-icon">🏆</span>
-                <h3>Nenhum ponto registrado ainda</h3>
-                <p>Os pontos aparecerão aqui assim que as partidas encerrarem.</p>
-              </div>
-            ) : (
-              <div className="ranking-table-container glass-panel">
-                <table className="ranking-table">
-                  <thead>
-                    <tr>
-                      <th className="ranking-position">Pos</th>
-                      <th>Nome</th>
-                      <th>Pontos</th>
-                      <th style={{ textAlign: 'center' }}>Placar Exato (25)</th>
-                      <th style={{ textAlign: 'center' }}>Saldo (18)</th>
-                      <th style={{ textAlign: 'center' }}>Vencedor+Gols (15/12)</th>
-                      <th style={{ textAlign: 'center' }}>Apenas Venc (10)</th>
-                      <th style={{ textAlign: 'center' }}>Palpites</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ranking.map((row, index) => {
-                      const pos = index + 1;
-                      let medalClass = '';
-                      if (pos === 1) medalClass = 'medal medal-gold';
-                      else if (pos === 2) medalClass = 'medal medal-silver';
-                      else if (pos === 3) medalClass = 'medal medal-bronze';
+            {(() => {
+              const displayRanking = (() => {
+                if (!showProjection) return ranking;
+                return [...ranking].sort((a, b) => {
+                  if (b.projectedPoints !== a.projectedPoints) {
+                    return b.projectedPoints - a.projectedPoints;
+                  }
+                  if (b.projectedExactScores !== a.projectedExactScores) {
+                    return b.projectedExactScores - a.projectedExactScores;
+                  }
+                  return b.totalGuesses - a.totalGuesses;
+                });
+              })();
 
-                      return (
-                        <tr key={row.userId} className="ranking-row">
-                          <td className="ranking-position">
-                            {medalClass ? <span className={medalClass}>{pos}</span> : pos}
-                          </td>
-                          <td>
-                            <span className="ranking-name">{row.userName}</span>
-                            {row.userName.toLowerCase() === user.name.toLowerCase() && (
-                              <span style={{ fontSize: '10px', marginLeft: '6px', color: 'var(--color-primary)', fontWeight: '700', textTransform: 'uppercase' }}>Você</span>
-                            )}
-                          </td>
-                          <td>
-                            <span className="ranking-points">{row.totalPoints} pts</span>
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <span className="ranking-stat-pill" style={{ color: '#fbbf24' }}>{row.exactScores}</span>
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <span className="ranking-stat-pill" style={{ color: '#a7f3d0' }}>{row.winnerDiff}</span>
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <span className="ranking-stat-pill" style={{ color: '#93c5fd' }}>{row.winnerGoals}</span>
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <span className="ranking-stat-pill" style={{ color: '#e2e8f0' }}>{row.winnerOnly}</span>
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <span>{row.totalGuesses}</span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+              return !rankingLoaded ? (
+                <div className="loading-box glass-panel">
+                  <RefreshCw className="animate-spin" size={32} style={{ color: 'var(--color-primary)' }} />
+                  <p>Carregando classificação...</p>
+                </div>
+              ) : ranking.length === 0 ? (
+                <div className="empty-box glass-panel">
+                  <span className="empty-box-icon">🏆</span>
+                  <h3>Nenhum ponto registrado ainda</h3>
+                  <p>Os pontos aparecerão aqui assim que as partidas encerrarem.</p>
+                </div>
+              ) : (
+                <div className="ranking-table-container glass-panel">
+                  <table className="ranking-table">
+                    <thead>
+                      <tr>
+                        <th className="ranking-position">Pos</th>
+                        <th>Nome</th>
+                        <th>Pontos</th>
+                        <th style={{ textAlign: 'center' }}>Placar Exato (25)</th>
+                        <th style={{ textAlign: 'center' }}>Saldo (18)</th>
+                        <th style={{ textAlign: 'center' }}>Vencedor+Gols (15/12)</th>
+                        <th style={{ textAlign: 'center' }}>Apenas Venc (10)</th>
+                        <th style={{ textAlign: 'center' }}>Palpites</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {displayRanking.map((row, index) => {
+                        const pos = index + 1;
+                        let medalClass = '';
+                        if (pos === 1) medalClass = 'medal medal-gold';
+                        else if (pos === 2) medalClass = 'medal medal-silver';
+                        else if (pos === 3) medalClass = 'medal medal-bronze';
+
+                        const pointsToDisplay = showProjection ? row.projectedPoints : row.totalPoints;
+                        const exactToDisplay = showProjection ? row.projectedExactScores : row.exactScores;
+                        const diffToDisplay = showProjection ? row.projectedWinnerDiff : row.winnerDiff;
+                        const goalsToDisplay = showProjection ? row.projectedWinnerGoals : row.winnerGoals;
+                        const onlyToDisplay = showProjection ? row.projectedWinnerOnly : row.winnerOnly;
+                        const hasGain = showProjection && row.projectedPoints > row.totalPoints;
+
+                        return (
+                          <tr key={row.userId} className="ranking-row">
+                            <td className="ranking-position">
+                              {medalClass ? <span className={medalClass}>{pos}</span> : pos}
+                            </td>
+                            <td>
+                              <span className="ranking-name">{row.userName}</span>
+                              {row.userName.toLowerCase() === user.name.toLowerCase() && (
+                                <span style={{ fontSize: '10px', marginLeft: '6px', color: 'var(--color-primary)', fontWeight: '700', textTransform: 'uppercase' }}>Você</span>
+                              )}
+                            </td>
+                            <td>
+                              <span className="ranking-points">
+                                {pointsToDisplay} pts
+                                {hasGain && (
+                                  <span className="live-projection-dot" title="Ganhando pontos com jogos ao vivo">+{(row.projectedPoints - row.totalPoints)}</span>
+                                )}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <span className="ranking-stat-pill" style={{ color: '#fbbf24' }}>{exactToDisplay}</span>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <span className="ranking-stat-pill" style={{ color: '#a7f3d0' }}>{diffToDisplay}</span>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <span className="ranking-stat-pill" style={{ color: '#93c5fd' }}>{goalsToDisplay}</span>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <span className="ranking-stat-pill" style={{ color: '#e2e8f0' }}>{onlyToDisplay}</span>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <span>{row.totalGuesses}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </div>
         )}
 

@@ -485,14 +485,39 @@ app.get('/api/ranking', async (req, res) => {
       const winnerOnly = userGuesses.filter(g => g.points === 10).length;
       const totalGuesses = guesses.filter(g => g.userName.toLowerCase() === user.name.toLowerCase()).length;
 
+      // Live projection
+      let livePoints = 0;
+      let projectedExactScores = 0;
+      let projectedWinnerDiff = 0;
+      let projectedWinnerGoals = 0;
+      let projectedWinnerOnly = 0;
+
+      const liveMatches = db.matches.filter(m => m.status === 'live');
+      liveMatches.forEach(match => {
+        const guess = guesses.find(g => g.matchId === match.id && g.userName.toLowerCase() === user.name.toLowerCase());
+        if (guess && match.scoreA !== null && match.scoreB !== null) {
+          const pts = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
+          livePoints += pts;
+          if (pts === 25) projectedExactScores++;
+          else if (pts === 18) projectedWinnerDiff++;
+          else if (pts === 15 || pts === 12) projectedWinnerGoals++;
+          else if (pts === 10) projectedWinnerOnly++;
+        }
+      });
+
       return {
         userId: user.id,
         userName: user.name,
         totalPoints,
+        projectedPoints: totalPoints + livePoints,
         exactScores,
         winnerDiff,
         winnerGoals,
         winnerOnly,
+        projectedExactScores: exactScores + projectedExactScores,
+        projectedWinnerDiff: winnerDiff + projectedWinnerDiff,
+        projectedWinnerGoals: winnerGoals + projectedWinnerGoals,
+        projectedWinnerOnly: winnerOnly + projectedWinnerOnly,
         totalGuesses
       };
     });
