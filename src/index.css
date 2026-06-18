@@ -836,102 +836,7 @@ header {
   color: var(--text-muted);
 }
 
-/* Mobile Responsiveness Improvements */
-@media (max-width: 768px) {
-  header {
-    padding: 16px 0;
-    margin-bottom: 24px;
-  }
-  
-  .header-content {
-    flex-direction: column;
-    gap: 16px;
-    align-items: center;
-    text-align: center;
-  }
-
-  .brand h1 {
-    font-size: 20px;
-  }
-
-  .tabs-navigation {
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 4px;
-    margin-bottom: 24px;
-  }
-
-  .tab-btn {
-    padding: 10px;
-    font-size: 13px;
-    flex: 1 1 calc(50% - 4px); /* Exibe como grade 2x2 no mobile */
-  }
-
-  .matches-grid {
-    grid-template-columns: 1fr; /* Coluna única no celular */
-    gap: 16px;
-  }
-
-  .match-card {
-    padding: 16px;
-  }
-
-  .team-emoji {
-    font-size: 28px;
-  }
-
-  .team-name {
-    font-size: 14px;
-    max-width: 90px;
-  }
-
-  .score-display {
-    font-size: 24px;
-  }
-
-  .score-number {
-    padding: 2px 8px;
-    min-width: 32px;
-  }
-
-  .ranking-table th, 
-  .ranking-table td {
-    padding: 12px 10px;
-    font-size: 12px;
-  }
-
-  /* Oculta colunas detalhadas no celular para manter o ranking legível */
-  .ranking-table th:nth-child(4),
-  .ranking-table td:nth-child(4),
-  .ranking-table th:nth-child(5),
-  .ranking-table td:nth-child(5),
-  .ranking-table th:nth-child(6),
-  .ranking-table td:nth-child(6),
-  .ranking-table th:nth-child(7),
-  .ranking-table td:nth-child(7) {
-    display: none;
-  }
-
-  .rules-container {
-    grid-template-columns: 1fr;
-    gap: 16px;
-  }
-
-  .rules-content {
-    padding: 20px;
-  }
-
-  .modal-content {
-    padding: 20px;
-    max-width: 100%;
-  }
-
-  .form-input-number {
-    width: 60px;
-    height: 50px;
-    font-size: 22px;
-  }
-}
+/* Mobile Responsiveness Improvements moved to the end of the file to prevent overriding bugs */
 
 /* Partidas ao vivo */
 .match-badge.live {
@@ -1064,6 +969,7 @@ header {
 
 .team-column {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1079,6 +985,9 @@ header {
   font-weight: 800;
   font-size: 16px;
   color: var(--text-primary);
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
 }
 
 .details-score-box {
@@ -1140,6 +1049,7 @@ header {
 
 .scorers-list {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1313,6 +1223,183 @@ header {
 .team-flag-emoji-fallback {
   font-size: 24px;
   display: inline-block;
+}
+
+/* Mobile Responsiveness Improvements */
+@media (max-width: 768px) {
+  header {
+    padding: 16px 0;
+    margin-bottom: 24px;
+  }
+  
+  .header-content {
+    flex-direction: column;
+    gap: 16px;
+    align-items: center;
+    text-align: center;
+  }
+
+  .brand h1 {
+    font-size: 20px;
+  }
+
+  .tabs-navigation {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 24px;
+  }
+
+  .tab-btn {
+    padding: 10px;
+    font-size: 13px;
+    flex: 1 1 calc(50% - 4px); /* Exibe como grade 2x2 no mobile */
+  }
+
+  .matches-grid {
+    grid-template-columns: 1fr; /* Coluna única no celular */
+    gap: 16px;
+  }
+
+  .match-card {
+    padding: 16px;
+  }
+
+  .team-emoji {
+    font-size: 28px;
+  }
+
+  .team-name {
+    font-size: 14px;
+    max-width: 90px;
+  }
+
+  .score-display {
+    font-size: 24px;
+  }
+
+  .score-number {
+    padding: 2px 8px;
+    min-width: 32px;
+  }
+
+  .ranking-table th, 
+  .ranking-table td {
+    padding: 12px 10px;
+    font-size: 12px;
+  }
+
+  /* Oculta colunas detalhadas no celular para manter o ranking legível */
+  .ranking-table th:nth-child(4),
+  .ranking-table td:nth-child(4),
+  .ranking-table th:nth-child(5),
+  .ranking-table td:nth-child(5),
+  .ranking-table th:nth-child(6),
+  .ranking-table td:nth-child(6),
+  .ranking-table th:nth-child(7),
+  .ranking-table td:nth-child(7) {
+    display: none;
+  }
+
+  .rules-container {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .rules-content {
+    padding: 20px;
+  }
+
+  .modal-overlay {
+    padding: 12px;
+  }
+
+  .modal-content {
+    padding: 20px;
+    max-width: 100%;
+  }
+
+  .form-input-number {
+    width: 60px;
+    height: 50px;
+    font-size: 22px;
+  }
+
+  /* Match Details Modal Mobile Styles */
+  .match-details-modal {
+    max-width: 100%;
+    gap: 12px;
+  }
+  
+  .stadium-details-box {
+    padding: 10px;
+    gap: 10px;
+  }
+  
+  .stadium-icon {
+    font-size: 24px;
+  }
+  
+  .stadium-name {
+    font-size: 13px;
+  }
+  
+  .stadium-location {
+    font-size: 11px;
+  }
+  
+  .details-scoreboard {
+    padding: 12px 8px;
+    margin: 4px 0;
+  }
+  
+  .details-team-flag {
+    width: 48px;
+    height: 32px;
+  }
+  
+  .details-team-name {
+    font-size: 13px;
+    line-height: 1.2;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
+  }
+  
+  .score-num {
+    font-size: 28px;
+    padding: 4px 8px;
+    min-width: 44px;
+  }
+  
+  .score-numbers {
+    gap: 6px;
+  }
+  
+  .details-score-box {
+    padding: 0 6px;
+  }
+  
+  .scorers-section {
+    padding: 10px;
+  }
+  
+  .scorers-grid {
+    gap: 10px;
+  }
+  
+  .scorers-list {
+    flex: 1;
+    min-width: 0;
+  }
+  
+  .scorer-item {
+    font-size: 11px;
+  }
+  
+  .user-guess-details-panel {
+    padding: 12px;
+  }
 }
 
 
