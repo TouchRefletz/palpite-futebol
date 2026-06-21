@@ -123,12 +123,42 @@ const getTeamFlagUrl = (name) => {
   return null;
 };
 
-const renderTeamFlag = (name, className = "team-flag") => {
-  const url = getTeamFlagUrl(name);
-  if (url) {
-    return <img src={url} alt={name} className={className} onError={(e) => { e.target.style.display = 'none'; }} />;
+const TeamFlagImage = ({ name, className, logoUrl }) => {
+  const [imgSrc, setImgSrc] = React.useState(logoUrl || getTeamFlagUrl(name));
+  const [hasError, setHasError] = React.useState(false);
+
+  React.useEffect(() => {
+    setImgSrc(logoUrl || getTeamFlagUrl(name));
+    setHasError(false);
+  }, [name, logoUrl]);
+
+  if (hasError || !imgSrc) {
+    return <span className="team-flag-emoji-fallback">{getTeamEmoji(name)}</span>;
   }
-  return <span className="team-flag-emoji-fallback">{getTeamEmoji(name)}</span>;
+
+  return (
+    <img 
+      src={imgSrc} 
+      alt={name} 
+      className={className} 
+      onError={() => {
+        if (imgSrc === logoUrl) {
+          const flagUrl = getTeamFlagUrl(name);
+          if (flagUrl) {
+            setImgSrc(flagUrl);
+          } else {
+            setHasError(true);
+          }
+        } else {
+          setHasError(true);
+        }
+      }} 
+    />
+  );
+};
+
+const renderTeamFlag = (name, className = "team-flag", logoUrl = null) => {
+  return <TeamFlagImage name={name} className={className} logoUrl={logoUrl} />;
 };
 
 const getGuessFilterLabel = (filter) => {
@@ -145,6 +175,198 @@ const getTimeFilterLabel = (filter) => {
   if (filter === 'future') return 'Futuros';
   return '';
 };
+
+const LeagueDropdown = ({ selectedLeague, setSelectedLeague }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = React.useRef(null);
+
+  const leagues = [
+    { value: 'fifa.world', label: 'Copa do Mundo', logo: 'https://a.espncdn.com/i/leaguelogos/soccer/500/4.png', category: 'Internacional' },
+    { value: 'bra.1', label: 'Brasileirão Série A', logo: 'https://a.espncdn.com/i/leaguelogos/soccer/500/85.png', category: 'Nacional' },
+    { value: 'uefa.champions', label: 'UEFA Champions League', logo: 'https://a.espncdn.com/i/leaguelogos/soccer/500/2.png', category: 'Continente' },
+    { value: 'eng.1', label: 'Premier League', logo: 'https://a.espncdn.com/i/leaguelogos/soccer/500/23.png', category: 'Inglaterra' },
+    { value: 'esp.1', label: 'La Liga', logo: 'https://a.espncdn.com/i/leaguelogos/soccer/500/15.png', category: 'Espanha' }
+  ];
+
+  const currentLeague = leagues.find(l => l.value === selectedLeague) || leagues[0];
+
+  React.useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="league-dropdown-container" ref={dropdownRef} style={{ position: 'relative', zIndex: 100 }}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="league-dropdown-trigger"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          background: 'rgba(255, 255, 255, 0.06)',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          borderRadius: '10px',
+          padding: '8px 16px',
+          color: 'var(--text-primary, #fff)',
+          fontFamily: 'var(--font-sans)',
+          fontSize: '14px',
+          fontWeight: '600',
+          cursor: 'pointer',
+          transition: 'all 0.2s ease',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+          backdropFilter: 'blur(8px)',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)';
+          e.currentTarget.style.borderColor = 'var(--color-primary)';
+        }}
+        onMouseLeave={(e) => {
+          if (!isOpen) {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)';
+            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+          }
+        }}
+      >
+        <div style={{
+          width: '22px',
+          height: '22px',
+          backgroundColor: '#fff',
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '2px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+          flexShrink: 0
+        }}>
+          <img 
+            src={currentLeague.logo} 
+            alt={currentLeague.label} 
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+          />
+        </div>
+        <span>{currentLeague.label}</span>
+        <ChevronDown size={16} style={{ 
+          marginLeft: '4px',
+          transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+          transition: 'transform 0.2s ease',
+          opacity: 0.7
+        }} />
+      </button>
+
+      {isOpen && (
+        <div
+          className="league-dropdown-menu"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 8px)',
+            right: 0,
+            width: '260px',
+            background: '#0d1321',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            borderRadius: '12px',
+            padding: '8px',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+            backdropFilter: 'blur(20px)',
+          }}
+        >
+          <div style={{
+            fontSize: '11px',
+            fontWeight: '700',
+            color: 'var(--text-secondary)',
+            textTransform: 'uppercase',
+            letterSpacing: '1px',
+            padding: '6px 8px 4px 8px',
+          }}>
+            Campeonato
+          </div>
+          {leagues.map(league => {
+            const isSelected = league.value === selectedLeague;
+            return (
+              <button
+                key={league.value}
+                type="button"
+                onClick={() => {
+                  setSelectedLeague(league.value);
+                  setIsOpen(false);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  background: isSelected ? 'rgba(16, 185, 129, 0.12)' : 'transparent',
+                  border: 'none',
+                  color: isSelected ? 'var(--color-primary)' : 'var(--text-primary, #fff)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: '13px',
+                  fontWeight: isSelected ? '700' : '500',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'all 0.15s ease',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSelected) {
+                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                    e.currentTarget.style.color = '#fff';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isSelected) {
+                    e.currentTarget.style.background = 'transparent';
+                    e.currentTarget.style.color = 'var(--text-primary, #fff)';
+                  }
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{
+                    width: '26px',
+                    height: '26px',
+                    backgroundColor: '#fff',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '2px',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                    flexShrink: 0
+                  }}>
+                    <img 
+                      src={league.logo} 
+                      alt={league.label} 
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+                    />
+                  </div>
+                  <div>
+                    <div style={{ color: 'inherit' }}>{league.label}</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '400', marginTop: '2px' }}>
+                      {league.category}
+                    </div>
+                  </div>
+                </div>
+                {isSelected && (
+                  <Check size={16} style={{ color: 'var(--color-primary)' }} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 
 function App() {
   // Authentication & session
@@ -193,6 +415,12 @@ function App() {
   // Toggle visible guesses for finished matches
   const [expandedGuesses, setExpandedGuesses] = useState({});
   const [activeMatchDetails, setActiveMatchDetails] = useState(null);
+  const [selectedLeague, setSelectedLeague] = useState('fifa.world');
+
+  const selectedLeagueRef = React.useRef(selectedLeague);
+  useEffect(() => {
+    selectedLeagueRef.current = selectedLeague;
+  }, [selectedLeague]);
 
   // Auto-hide toast
   useEffect(() => {
@@ -219,15 +447,17 @@ function App() {
   };
 
   // Fetch data
-  const fetchMatches = async (silent = false) => {
+  const fetchMatches = async (silent = false, league = selectedLeague) => {
     if (!user) return;
     if (!silent) setLoading(true);
     try {
-      const res = await fetch(`/api/matches?userName=${encodeURIComponent(user.name)}`);
+      const res = await fetch(`/api/matches?userName=${encodeURIComponent(user.name)}&league=${league}`);
       if (res.ok) {
         const data = await res.json();
-        setMatches(data);
-        setLastUpdated(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        if (league === selectedLeagueRef.current) {
+          setMatches(data);
+          setLastUpdated(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
       } else if (!silent) {
         showToast('Erro ao carregar jogos.', 'error');
       }
@@ -235,19 +465,23 @@ function App() {
       console.error(e);
       if (!silent) showToast('Erro de conexão ao carregar jogos.', 'error');
     } finally {
-      if (!silent) setLoading(false);
-      setMatchesLoaded(true);
+      if (league === selectedLeagueRef.current) {
+        if (!silent) setLoading(false);
+        setMatchesLoaded(true);
+      }
     }
   };
 
-  const fetchRanking = async (silent = false) => {
+  const fetchRanking = async (silent = false, league = selectedLeague) => {
     if (!user) return;
     if (!silent) setLoading(true);
     try {
-      const res = await fetch('/api/ranking');
+      const res = await fetch(`/api/ranking?league=${league}`);
       if (res.ok) {
         const data = await res.json();
-        setRanking(data);
+        if (league === selectedLeagueRef.current) {
+          setRanking(data);
+        }
       } else if (!silent) {
         showToast('Erro ao carregar ranking.', 'error');
       }
@@ -255,25 +489,31 @@ function App() {
       console.error(e);
       if (!silent) showToast('Erro de conexão ao carregar ranking.', 'error');
     } finally {
-      if (!silent) setLoading(false);
-      setRankingLoaded(true);
+      if (league === selectedLeagueRef.current) {
+        if (!silent) setLoading(false);
+        setRankingLoaded(true);
+      }
     }
   };
 
   useEffect(() => {
     if (user) {
-      fetchMatches();
-      fetchRanking();
+      setMatches([]);
+      setRanking([]);
+      setMatchesLoaded(false);
+      setRankingLoaded(false);
+      fetchMatches(false, selectedLeague);
+      fetchRanking(false, selectedLeague);
 
       // Atualização constante em segundo plano (silenciosa) a cada 30 segundos
       const interval = setInterval(() => {
-        fetchMatches(true);
-        fetchRanking(true);
+        fetchMatches(true, selectedLeagueRef.current);
+        fetchRanking(true, selectedLeagueRef.current);
       }, 30000);
 
       return () => clearInterval(interval);
     }
-  }, [user]);
+  }, [user, selectedLeague]);
 
 
   // Handle Login / Registration
@@ -441,6 +681,37 @@ function App() {
     }
   };
 
+  // Re-enable Auto Sync (Admin)
+  const handleUnlockSync = async (matchId) => {
+    if (!window.confirm('Deseja reativar a sincronização automática com a API para este jogo?')) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch('/api/admin/matches/unlock-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matchId,
+          requesterRole: user.role
+        })
+      });
+
+      if (res.ok) {
+        showToast('Sincronização automática reativada!');
+        fetchMatches();
+        fetchRanking();
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Erro ao reativar sincronização.', 'error');
+      }
+    } catch (e) {
+      showToast('Erro de rede ao reativar sincronização.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Create Match (Admin)
   const handleCreateMatchSubmit = async (e) => {
     e.preventDefault();
@@ -492,6 +763,7 @@ function App() {
         body: JSON.stringify({
           userId: selectedUserForAdjustment.userId,
           pointsAdjustment: parseInt(adjustmentForm.pointsAdjustment) || 0,
+          league: selectedLeague,
           requesterRole: user.role
         })
       });
@@ -524,7 +796,8 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          requesterRole: user.role
+          requesterRole: user.role,
+          league: selectedLeague
         })
       });
 
@@ -544,24 +817,27 @@ function App() {
     }
   };
 
-  // Sincronizar Jogos da Copa 2026 (Admin)
+  // Sincronizar Jogos de Campeonatos (Admin)
   const handleSyncCopa = async () => {
     setLoading(true);
     try {
       const res = await fetch('/api/copa2026/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requesterRole: user.role })
+        body: JSON.stringify({ 
+          requesterRole: user.role,
+          league: selectedLeague
+        })
       });
       const data = await res.json();
       if (res.ok) {
-        showToast(data.message || 'Jogos da Copa de 2026 sincronizados!');
+        showToast(data.message || 'Jogos sincronizados com sucesso!');
         fetchMatches();
       } else {
-        showToast(data.error || 'Erro ao sincronizar jogos da Copa.', 'error');
+        showToast(data.error || 'Erro ao sincronizar jogos.', 'error');
       }
     } catch (e) {
-      showToast('Erro de rede ao sincronizar jogos da Copa.', 'error');
+      showToast('Erro de rede ao sincronizar jogos.', 'error');
     } finally {
       setLoading(false);
     }
@@ -574,7 +850,10 @@ function App() {
       const res = await fetch('/api/copa2026/simulate-live', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requesterRole: user.role })
+        body: JSON.stringify({ 
+          requesterRole: user.role,
+          league: selectedLeague
+        })
       });
       const data = await res.json();
       if (res.ok) {
@@ -666,7 +945,7 @@ function App() {
       if (scorersStr.startsWith('[') || scorersStr.startsWith('{')) {
         let clean = scorersStr.trim().replace(/^\{|\}$|^\[|\]$/g, '');
         return clean.split(',')
-          .map(s => s.trim().replace(/^["'“‟”]+|["'“‟”]+$/g, '').trim())
+          .map(s => s.trim().replace(/^["“‟”]+|["“‟”]+$/g, '').trim())
           .filter(Boolean);
       }
       return [scorersStr];
@@ -745,35 +1024,41 @@ function App() {
             <h1>Bolão dos Amigos</h1>
           </div>
           
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div className="user-badge">
-              <User size={16} style={{ color: 'var(--text-secondary)' }} />
-              <span className="user-badge-name">{user.name}</span>
-              <span className={`user-badge-role ${viewMode}`}>
-                {user.role === 'admin' ? (viewMode === 'admin' ? 'Organizador' : 'Org (Jogador)') : 'Participante'}
-              </span>
+          <div className="header-actions">
+            <div className="header-league-wrapper">
+              <LeagueDropdown selectedLeague={selectedLeague} setSelectedLeague={setSelectedLeague} />
             </div>
             
-            {user.role === 'admin' && (
-              <button 
-                onClick={() => {
-                  const newMode = viewMode === 'admin' ? 'player' : 'admin';
-                  setViewMode(newMode);
-                  if (newMode === 'player' && activeTab === 'admin') {
-                    setActiveTab('matches');
-                  }
-                  showToast(`Visualização alterada para o modo ${newMode === 'admin' ? 'Organizador' : 'Jogador'}.`);
-                }}
-                className="btn btn-secondary btn-icon-only"
-                title={viewMode === 'admin' ? "Visualizar como Jogador" : "Visualizar como Organizador"}
-              >
-                {viewMode === 'admin' ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            )}
+            <div className="header-user-row">
+              <div className="user-badge">
+                <User size={16} style={{ color: 'var(--text-secondary)' }} />
+                <span className="user-badge-name">{user.name}</span>
+                <span className={`user-badge-role ${viewMode}`}>
+                  {user.role === 'admin' ? (viewMode === 'admin' ? 'Organizador' : 'Org (Jogador)') : 'Participante'}
+                </span>
+              </div>
+              
+              {user.role === 'admin' && (
+                <button 
+                  onClick={() => {
+                    const newMode = viewMode === 'admin' ? 'player' : 'admin';
+                    setViewMode(newMode);
+                    if (newMode === 'player' && activeTab === 'admin') {
+                      setActiveTab('matches');
+                    }
+                    showToast(`Visualização alterada para o modo ${newMode === 'admin' ? 'Organizador' : 'Jogador'}.`);
+                  }}
+                  className="btn btn-secondary btn-icon-only"
+                  title={viewMode === 'admin' ? "Visualizar como Jogador" : "Visualizar como Organizador"}
+                >
+                  {viewMode === 'admin' ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              )}
 
-            <button onClick={handleLogout} className="btn btn-secondary btn-icon-only" title="Sair">
-              <LogOut size={16} />
-            </button>
+              <button onClick={handleLogout} className="btn btn-secondary btn-icon-only" title="Sair">
+                <LogOut size={16} />
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -1003,14 +1288,21 @@ function App() {
                       >
                         <div className="match-header">
                           <span>{formatDate(match.date)}</span>
-                          <span className={`match-badge ${match.status}`}>
-                            {isFinished ? 'Encerrado' : match.status === 'live' ? '• AO VIVO' : 'Aberto'}
-                          </span>
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            {match.manuallyUpdated && (
+                              <span className="match-badge finished" style={{ background: '#f59e0b', color: '#fff' }}>
+                                Manual
+                              </span>
+                            )}
+                            <span className={`match-badge ${match.status}`}>
+                              {isFinished ? 'Encerrado' : match.status === 'live' ? `• ${match.matchClock || 'AO VIVO'}` : 'Aberto'}
+                            </span>
+                          </div>
                         </div>
 
                         <div className="match-teams">
                           <div className="team">
-                            {renderTeamFlag(match.teamA, "team-flag")}
+                            {renderTeamFlag(match.teamA, "team-flag", match.teamALogo)}
                             <span className="team-name" title={match.teamA}>{match.teamA}</span>
                           </div>
 
@@ -1032,7 +1324,7 @@ function App() {
                           </div>
 
                           <div className="team">
-                            {renderTeamFlag(match.teamB, "team-flag")}
+                            {renderTeamFlag(match.teamB, "team-flag", match.teamBLogo)}
                             <span className="team-name" title={match.teamB}>{match.teamB}</span>
                           </div>
                         </div>
@@ -1065,19 +1357,46 @@ function App() {
                             )
                           )}
 
-                          {/* Allow admin to set result */}
-                          {user.role === 'admin' && viewMode === 'admin' && !isFinished && (
-                            <button 
-                              onClick={(e) => {
-                                  e.stopPropagation();
-                                  setResultModal({ isOpen: true, match });
-                                  setResultForm({ scoreA: '', scoreB: '' });
-                              }}
-                              className="btn btn-secondary"
-                              style={{ width: '100%' }}
-                            >
-                              Inserir Placar Oficial
-                            </button>
+                          {/* Allow admin to set/edit result */}
+                          {user.role === 'admin' && viewMode === 'admin' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', marginTop: '8px' }}>
+                              <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setResultModal({ isOpen: true, match });
+                                    setResultForm({ 
+                                      scoreA: match.scoreA !== null && match.scoreA !== undefined ? match.scoreA.toString() : '', 
+                                      scoreB: match.scoreB !== null && match.scoreB !== undefined ? match.scoreB.toString() : '' 
+                                    });
+                                }}
+                                className="btn btn-secondary"
+                                style={{ width: '100%' }}
+                              >
+                                {isFinished ? 'Alterar Placar Oficial' : 'Inserir Placar Oficial'}
+                              </button>
+
+                              {match.manuallyUpdated && (
+                                <button 
+                                  onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleUnlockSync(match.id);
+                                  }}
+                                  className="btn"
+                                  style={{ 
+                                    width: '100%', 
+                                    fontSize: '11px', 
+                                    padding: '6px 12px', 
+                                    background: 'rgba(239, 68, 68, 0.1)', 
+                                    color: '#ef4444', 
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    borderRadius: 'var(--border-radius-sm, 4px)',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  Reativar Sincronização Automática
+                                </button>
+                              )}
+                            </div>
                           )}
 
                           {/* Edit guess if still open */}
@@ -1231,7 +1550,7 @@ function App() {
                   }} 
                   className="btn btn-secondary btn-icon-only" 
                   title="Atualizar Classificação"
-                  style={{ height: '36px', width: '36px' }}
+                  style={{ height: '36px', width: '36px', padding: '0' }}
                 >
                   <RefreshCw size={16} />
                 </button>
@@ -1474,19 +1793,19 @@ function App() {
                 </div>
 
                 <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
-                  <h4 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px' }}>Jogos da Copa de 2026</h4>
+                  <h4 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px' }}>Sincronização com API</h4>
                   <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                    Carregue automaticamente uma tabela com os grandes jogos da Copa do Mundo de 2026 para os seus amigos palpitarem.
+                    Carregue automaticamente e sincronize os jogos e resultados do campeonato selecionado atualmente no seletor da barra superior.
                   </p>
                   <button onClick={handleSyncCopa} className="btn btn-secondary" style={{ gap: '8px' }} disabled={loading}>
-                    <Sparkles size={16} style={{ color: 'var(--color-secondary)' }} /> Carregar Jogos da Copa 2026
+                    <Sparkles size={16} style={{ color: 'var(--color-secondary)' }} /> Sincronizar Campeonato Atual
                   </button>
                 </div>
 
                 <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
                   <h4 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px' }}>Simulador de Jogos em Tempo Real</h4>
                   <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                    Simule o início, gols e encerramento de partidas da Copa. Veja os pontos e o ranking atualizarem em tempo real no navegador!
+                    Simule o início, gols e encerramento de partidas do campeonato selecionado. Veja os pontos e o ranking atualizarem em tempo real no navegador!
                   </p>
                   <button onClick={handleSimulateLive} className="btn btn-secondary" style={{ gap: '8px' }} disabled={loading}>
                     <Clock size={16} style={{ color: 'var(--color-danger)' }} /> Simular Acontecimento no Jogo
@@ -1496,7 +1815,7 @@ function App() {
                 <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
                   <h4 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '8px' }}>Recalcular Todas as Pontuações</h4>
                   <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                    Recalcula os pontos de todos os palpites com base nos placares reais das partidas terminadas. Útil para corrigir eventuais inconsistências.
+                    Recalcula os pontos de todos os palpites deste campeonato com base nos placares reais das partidas terminadas. Útil para corrigir eventuais inconsistências.
                   </p>
                   <button onClick={handleRecalculatePoints} className="btn btn-secondary" style={{ gap: '8px' }} disabled={loading}>
                     <RefreshCw size={16} style={{ color: 'var(--color-primary)' }} /> Recalcular Pontuações Oficialmente
@@ -1581,12 +1900,12 @@ function App() {
             
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '24px', marginBottom: '16px' }}>
               <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                {renderTeamFlag(guessModal.match.teamA, "modal-team-flag")}
+                {renderTeamFlag(guessModal.match.teamA, "modal-team-flag", guessModal.match.teamALogo)}
                 <div style={{ fontWeight: '700', fontSize: '14px', marginTop: '8px' }}>{guessModal.match.teamA}</div>
               </div>
               <span style={{ color: 'var(--text-muted)', fontWeight: '800' }}>VS</span>
               <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                {renderTeamFlag(guessModal.match.teamB, "modal-team-flag")}
+                {renderTeamFlag(guessModal.match.teamB, "modal-team-flag", guessModal.match.teamBLogo)}
                 <div style={{ fontWeight: '700', fontSize: '14px', marginTop: '8px' }}>{guessModal.match.teamB}</div>
               </div>
             </div>
@@ -1667,12 +1986,12 @@ function App() {
 
               <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '24px', marginBottom: '16px' }}>
                 <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  {renderTeamFlag(adminGuessModal.match.teamA, "modal-team-flag")}
+                  {renderTeamFlag(adminGuessModal.match.teamA, "modal-team-flag", adminGuessModal.match.teamALogo)}
                   <div style={{ fontWeight: '700', fontSize: '14px', marginTop: '8px' }}>{adminGuessModal.match.teamA}</div>
                 </div>
                 <span style={{ color: 'var(--text-muted)', fontWeight: '800' }}>VS</span>
                 <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  {renderTeamFlag(adminGuessModal.match.teamB, "modal-team-flag")}
+                  {renderTeamFlag(adminGuessModal.match.teamB, "modal-team-flag", adminGuessModal.match.teamBLogo)}
                   <div style={{ fontWeight: '700', fontSize: '14px', marginTop: '8px' }}>{adminGuessModal.match.teamB}</div>
                 </div>
               </div>
@@ -1777,12 +2096,12 @@ function App() {
             
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '24px', marginBottom: '16px' }}>
               <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                {renderTeamFlag(resultModal.match.teamA, "modal-team-flag")}
+                {renderTeamFlag(resultModal.match.teamA, "modal-team-flag", resultModal.match.teamALogo)}
                 <div style={{ fontWeight: '700', fontSize: '14px', marginTop: '8px' }}>{resultModal.match.teamA}</div>
               </div>
               <span style={{ color: 'var(--text-muted)', fontWeight: '800' }}>VS</span>
               <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                {renderTeamFlag(resultModal.match.teamB, "modal-team-flag")}
+                {renderTeamFlag(resultModal.match.teamB, "modal-team-flag", resultModal.match.teamBLogo)}
                 <div style={{ fontWeight: '700', fontSize: '14px', marginTop: '8px' }}>{resultModal.match.teamB}</div>
               </div>
             </div>
@@ -1921,15 +2240,22 @@ function App() {
             {/* Date and Status */}
             <div className="match-time-status">
               <span className="time-text">📅 {formatDate(activeMatchDetails.date)}</span>
-              <span className={`match-badge ${activeMatchDetails.status}`}>
-                {activeMatchDetails.status === 'finished' ? 'Encerrado' : activeMatchDetails.status === 'live' ? '• AO VIVO' : 'Aberto'}
-              </span>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                {activeMatchDetails.manuallyUpdated && (
+                  <span className="match-badge finished" style={{ background: '#f59e0b', color: '#fff' }}>
+                    Manual
+                  </span>
+                )}
+                <span className={`match-badge ${activeMatchDetails.status}`}>
+                  {activeMatchDetails.status === 'finished' ? 'Encerrado' : activeMatchDetails.status === 'live' ? `• ${activeMatchDetails.matchClock || 'AO VIVO'}` : 'Aberto'}
+                </span>
+              </div>
             </div>
 
             {/* Scoreboard display */}
             <div className="details-scoreboard">
               <div className="team-column">
-                {renderTeamFlag(activeMatchDetails.teamA, "details-team-flag")}
+                {renderTeamFlag(activeMatchDetails.teamA, "details-team-flag", activeMatchDetails.teamALogo)}
                 <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamA}</span>
               </div>
 
@@ -1946,7 +2272,7 @@ function App() {
               </div>
 
               <div className="team-column">
-                {renderTeamFlag(activeMatchDetails.teamB, "details-team-flag")}
+                {renderTeamFlag(activeMatchDetails.teamB, "details-team-flag", activeMatchDetails.teamBLogo)}
                 <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamB}</span>
               </div>
             </div>

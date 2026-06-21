@@ -86,3 +86,20 @@ export async function saveData(data) {
     console.error('Error writing to local JSON file:', error);
   }
 }
+
+// Queue for sequential database operations to prevent concurrent write conflicts
+let dbLock = Promise.resolve();
+
+export async function runExclusive(callback) {
+  const nextLock = dbLock.then(async () => {
+    try {
+      return await callback();
+    } catch (e) {
+      console.error("Error inside db exclusive execution:", e);
+      throw e;
+    }
+  });
+  dbLock = nextLock.then(() => {}, () => {}); // Continue chain even if callback fails
+  return nextLock;
+}
+

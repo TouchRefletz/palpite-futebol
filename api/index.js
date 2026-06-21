@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { getData, saveData } from './db.js';
+import { getData, saveData, runExclusive } from './db.js';
 
 const app = express();
 
@@ -69,7 +69,8 @@ function calculatePoints(guessA, guessB, resultA, resultB) {
   return 10; // Winner only
 }
 
-let lastSyncTime = 0;
+let lastSyncTimes = {};
+let syncPromises = {};
 
 const STADIUM_OFFSETS = {
   "1": -6, // Mexico City
@@ -128,118 +129,622 @@ function parseDate(localDateStr, stadiumId) {
   }
 }
 
-async function syncWithWorldCupAPI() {
+const TEAM_MAP = {
+  "Algeria": "Argélia",
+  "Argentina": "Argentina",
+  "Australia": "Austrália",
+  "Austria": "Áustria",
+  "Belgium": "Bélgica",
+  "Bosnia and Herzegovina": "Bósnia e Herzegovina",
+  "Bosnia-Herzegovina": "Bósnia e Herzegovina",
+  "Bosnia": "Bósnia e Herzegovina",
+  "Brazil": "Brasil",
+  "Canada": "Canadá",
+  "Cape Verde": "Cabo Verde",
+  "Cabo Verde": "Cabo Verde",
+  "Colombia": "Colômbia",
+  "Croatia": "Croácia",
+  "Curaçao": "Curaçao",
+  "Curacao": "Curaçao",
+  "Czech Republic": "República Tcheca",
+  "Czechia": "República Tcheca",
+  "República Checa": "República Tcheca",
+  "Democratic Republic of the Congo": "República Democrática do Congo",
+  "DR Congo": "República Democrática do Congo",
+  "Congo DR": "República Democrática do Congo",
+  "Ecuador": "Equador",
+  "Egypt": "Egito",
+  "England": "Inglaterra",
+  "France": "França",
+  "Germany": "Alemanha",
+  "Ghana": "Gana",
+  "Haiti": "Haiti",
+  "Iran": "Irã",
+  "IR Iran": "Irã",
+  "Iraq": "Iraque",
+  "Ivory Coast": "Costa do Marfim",
+  "Cote d'Ivoire": "Costa do Marfim",
+  "Japan": "Japão",
+  "Jordan": "Jordânia",
+  "Mexico": "México",
+  "Morocco": "Marrocos",
+  "Netherlands": "Holanda",
+  "New Zealand": "Nova Zelândia",
+  "Norway": "Noruega",
+  "Panama": "Panamá",
+  "Paraguay": "Paraguai",
+  "Portugal": "Portugal",
+  "Qatar": "Catar",
+  "Saudi Arabia": "Arábia Saudita",
+  "Scotland": "Escócia",
+  "Senegal": "Senegal",
+  "South Africa": "África do Sul",
+  "South Korea": "Coreia do Sul",
+  "Korea Republic": "Coreia do Sul",
+  "Spain": "Espanha",
+  "Sweden": "Suécia",
+  "Switzerland": "Suíça",
+  "Tunisia": "Tunísia",
+  "Turkey": "Turquia",
+  "Türkiye": "Turquia",
+  "United States": "Estados Unidos",
+  "USA": "Estados Unidos",
+  "Uruguay": "Uruguai",
+  "Uzbekistan": "Uzbequistão",
+  "Russia": "Rússia",
+  "Ukraine": "Ucrânia",
+  "Wales": "País de Gales",
+  "Poland": "Polônia",
+  "Denmark": "Dinamarca",
+  "Serbia": "Sérvia",
+  "Slovakia": "Eslováquia",
+  "Slovenia": "Eslovênia",
+  "Romania": "Romênia",
+  "Georgia": "Geórgia",
+  "Greece": "Grécia",
+  "Finland": "Finlândia",
+  "Hungary": "Hungria",
+  "Iceland": "Islândia",
+  "Northern Ireland": "Irlanda do Norte",
+  "Republic of Ireland": "Irlanda",
+  "Albania": "Albânia",
+  "North Macedonia": "Macedônia do Norte",
+  "Bulgaria": "Búlgária",
+  // Brazilian teams normalizations
+  "Athletico-PR": "Athletico Paranaense",
+  "Athletico Paranaense": "Athletico Paranaense",
+  "Atlético-PR": "Athletico Paranaense",
+  "Atletico-PR": "Athletico Paranaense",
+  "Atlético Mineiro": "Atlético-MG",
+  "Atlético-MG": "Atlético-MG",
+  "Atletico-MG": "Atlético-MG",
+  "Atletico Mineiro": "Atlético-MG",
+  "Red Bull Bragantino": "Red Bull Bragantino",
+  "RB Bragantino": "Red Bull Bragantino",
+  "Bragantino": "Red Bull Bragantino",
+  "Vasco da Gama": "Vasco da Gama",
+  "Vasco": "Vasco da Gama",
+  "Botafogo-RJ": "Botafogo",
+  "Coritiba-PR": "Coritiba",
+  "Cuiabá-MT": "Cuiabá",
+  "Cuiaba": "Cuiabá",
+  "Goiás-GO": "Goiás",
+  "Goias": "Goiás",
+  "América-MG": "América Mineiro",
+  "América Mineiro": "América Mineiro",
+  "America-MG": "América Mineiro",
+  "Ceará-CE": "Ceará",
+  "Ceara": "Ceará"
+};
+
+function normalizeTeam(name) {
+  if (!name) return "";
+  const trimmed = name.trim();
+  if (TEAM_MAP[trimmed]) return TEAM_MAP[trimmed];
+  return trimmed;
+}
+
+function translateTeam(name) {
+  if (!name) return "";
+  const trimmed = name.trim();
+  if (TEAM_MAP[trimmed]) return TEAM_MAP[trimmed];
+  
+  let translated = trimmed;
+  // Translate placeholders on the fly
+  translated = translated.replace(/Winner Match (\d+)/i, 'Vencedor do Jogo $1');
+  translated = translated.replace(/Loser Match (\d+)/i, 'Perdedor do Jogo $1');
+  translated = translated.replace(/Winner Group ([A-L])/i, '1º do Grupo $1');
+  translated = translated.replace(/Runner-up Group ([A-L])/i, '2º do Grupo $1');
+  translated = translated.replace(/3rd Group ([A-L/]+)/i, '3º do Grupo $1');
+  translated = translated.replace(/Group ([A-L])/i, 'Grupo $1');
+  
+  return translated;
+}
+
+async function fetchTeamLogo(teamName) {
+  try {
+    const url = `https://site.web.api.espn.com/apis/site/v2/sports/soccer/apis/search/v2?query=${encodeURIComponent(teamName)}&limit=5`; // wait, let's use the correct URL
+    // Wait, let's write: https://site.web.api.espn.com/apis/search/v2
+    const correctUrl = `https://site.web.api.espn.com/apis/search/v2?query=${encodeURIComponent(teamName)}&limit=5`;
+    const res = await fetch(correctUrl, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const teamResult = data.results?.find(r => r.type === 'team');
+    if (teamResult && teamResult.contents && teamResult.contents.length > 0) {
+      const match = teamResult.contents.find(t => t.sport === 'soccer');
+      if (match && match.image && match.image.default) {
+        return match.image.default;
+      }
+      const first = teamResult.contents[0];
+      if (first.image && first.image.default) {
+        return first.image.default;
+      }
+    }
+  } catch (e) {
+    console.error(`Failed to fetch logo for ${teamName}:`, e.message);
+  }
+  return null;
+}
+
+async function migrateDatabaseTeamNames() {
+  try {
+    const db = await getData();
+    let changed = false;
+    if (db.matches && Array.isArray(db.matches)) {
+      for (const match of db.matches) {
+        const translatedA = translateTeam(match.teamA);
+        const translatedB = translateTeam(match.teamB);
+        if (match.teamA !== translatedA) {
+          match.teamA = translatedA;
+          changed = true;
+        }
+        if (match.teamB !== translatedB) {
+          match.teamB = translatedB;
+          changed = true;
+        }
+        
+        // Convert stadium country
+        if (match.stadiumCountry === 'United States' || match.stadiumCountry === 'USA') {
+          match.stadiumCountry = 'Estados Unidos';
+          changed = true;
+        } else if (match.stadiumCountry === 'Mexico') {
+          match.stadiumCountry = 'México';
+          changed = true;
+        } else if (match.stadiumCountry === 'Canada') {
+          match.stadiumCountry = 'Canadá';
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      await saveData(db);
+      console.log('Database team names migrated successfully to Portuguese.');
+    }
+  } catch (err) {
+    console.error('Failed to run database team names migration:', err);
+  }
+}
+
+async function deduplicateDatabaseMatches() {
+  try {
+    await runExclusive(async () => {
+      const db = await getData();
+      if (!db.matches || !Array.isArray(db.matches)) return;
+
+      const uniqueMatches = [];
+      let changed = false;
+
+      // Group matches by ID first
+      const groups = {};
+      for (const match of db.matches) {
+        if (!match.id) continue;
+        if (!groups[match.id]) {
+          groups[match.id] = [];
+        }
+        groups[match.id].push(match);
+      }
+
+      for (const id in groups) {
+        const list = groups[id];
+        if (list.length > 1) {
+          // Sort to keep the best one:
+          // prefer manuallyUpdated, finished, or the one with scores
+          list.sort((a, b) => {
+            if (a.manuallyUpdated && !b.manuallyUpdated) return -1;
+            if (!a.manuallyUpdated && b.manuallyUpdated) return 1;
+            if (a.status === 'finished' && b.status !== 'finished') return -1;
+            if (a.status !== 'finished' && b.status === 'finished') return 1;
+            if (a.scoreA !== null && b.scoreA === null) return -1;
+            if (a.scoreA === null && b.scoreA !== null) return 1;
+            return 0;
+          });
+          uniqueMatches.push(list[0]);
+          changed = true;
+          console.log(`Deduplicating match ${id}, keeping the best of ${list.length} instances`);
+        } else {
+          uniqueMatches.push(list[0]);
+        }
+      }
+
+      if (changed) {
+        db.matches = uniqueMatches;
+        await saveData(db);
+        console.log('Database matches deduplicated successfully.');
+      } else {
+        console.log('No duplicate matches found in database.');
+      }
+    });
+  } catch (err) {
+    console.error('Failed to run database matches deduplication:', err);
+  }
+}
+
+// Run database migrations asynchronously on startup
+migrateDatabaseTeamNames();
+deduplicateDatabaseMatches();
+restoreScorersFromLocalBackup();
+
+
+async function fetchMatchDetailsFromESPN(league, espnEventId) {
+  try {
+    const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/summary?event=${espnEventId}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const comp = data.header?.competitions?.[0];
+    if (!comp || !comp.details) return null;
+
+    const homeId = comp.competitors?.find(c => c.homeAway === 'home')?.team?.id;
+    const awayId = comp.competitors?.find(c => c.homeAway === 'away')?.team?.id;
+
+    const extract = (teamId) => {
+      if (!teamId) return "null";
+      const goals = comp.details
+        .filter(d => d.scoringPlay === true && d.team && String(d.team.id) === String(teamId))
+        .map(d => {
+          const athlete = d.participants?.[0]?.athlete;
+          const name = athlete ? athlete.displayName : "Unknown";
+          const time = d.clock ? d.clock.displayValue : "";
+
+          let suffix = "";
+          if (d.ownGoal) {
+            suffix = " (GC)";
+          } else if (d.penaltyKick) {
+            suffix = " (P)";
+          }
+
+          return `"${name} ${time}${suffix}"`;
+        });
+      if (goals.length === 0) return "null";
+      return `{${goals.join(',')}}`;
+    };
+
+    return {
+      homeScorers: extract(homeId),
+      awayScorers: extract(awayId)
+    };
+  } catch (err) {
+    console.error(`Failed to fetch details for event ${espnEventId}:`, err);
+    return null;
+  }
+}
+
+async function restoreScorersFromLocalBackup() {
+  try {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    const { fileURLToPath } = await import('url');
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+
+    const localDbPath = path.join(__dirname, '../data/db.json');
+    const localContent = await fs.readFile(localDbPath, 'utf-8');
+    const localDb = JSON.parse(localContent);
+
+    await runExclusive(async () => {
+      const db = await getData();
+      let changed = false;
+
+      for (const match of db.matches) {
+        const currentHome = match.home_scorers;
+        const currentAway = match.away_scorers;
+        if (!currentHome || currentHome === 'null' || currentHome === '{}' ||
+            !currentAway || currentAway === 'null' || currentAway === '{}') {
+          
+          const backup = localDb.matches.find(m => 
+            m.id === match.id || 
+            (m.teamA === match.teamA && m.teamB === match.teamB && m.date === match.date)
+          );
+
+          if (backup && backup.home_scorers && backup.home_scorers !== 'null' && backup.home_scorers !== '{}') {
+            match.home_scorers = backup.home_scorers;
+            match.away_scorers = backup.away_scorers;
+            changed = true;
+            console.log(`Restored scorers for match ${match.id} (${match.teamA} vs ${match.teamB}) from local backup.`);
+          }
+        }
+      }
+
+      if (changed) {
+        await saveData(db);
+        console.log('Database matches updated with restored scorers.');
+      }
+    });
+  } catch (err) {
+    console.error('Failed to restore scorers from local backup:', err);
+  }
+}
+
+
+function extractScorers(competition, teamId) {
+  if (!competition.details) return "null";
+  
+  const goals = competition.details
+    .filter(d => d.scoringPlay === true && d.type && (d.type.text === "Goal" || d.type.text === "Own Goal" || d.type.text === "Penalty Goal"))
+    .filter(d => String(d.team.id) === String(teamId))
+    .map(d => {
+      const athlete = d.athletesInvolved && d.athletesInvolved[0];
+      const name = athlete ? athlete.displayName : "Unknown";
+      const time = d.clock ? d.clock.displayValue : "";
+      
+      let suffix = "";
+      if (d.type.text === "Own Goal") {
+        suffix = " (GC)";
+      } else if (d.penaltyKick) {
+        suffix = " (P)";
+      }
+      
+      return `"${name} ${time}${suffix}"`;
+    });
+  
+  if (goals.length === 0) return "null";
+  return `{${goals.join(',')}}`;
+}
+
+async function syncWithWorldCupAPI(league = 'fifa.world') {
   const now = Date.now();
-  if (now - lastSyncTime < 30000) {
-    // Cache de 30 segundos para evitar sobrecarregar a API pública
+  const lastSync = lastSyncTimes[league] || 0;
+  if (now - lastSync < 30000) {
+    // Cache de 30 segundos por campeonato
     return;
   }
 
+  // Se já houver sincronização ativa para esta liga, aguarda a promessa terminar
+  if (syncPromises[league]) {
+    await syncPromises[league];
+    return;
+  }
+
+  let resolveSync;
+  syncPromises[league] = new Promise(resolve => { resolveSync = resolve; });
+
   try {
-    const res = await fetch('https://worldcup26.ir/get/games', {
-      signal: AbortSignal.timeout(20000)
-    });
-    if (!res.ok) {
-      console.error('WorldCup26 API returned error:', res.status);
-      return;
+    // Build URLs based on selected league
+    let urls = [];
+    if (league === 'fifa.world') {
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260611-20260719&limit=200&lang=pt');
+    } else if (league === 'bra.1') {
+      // Fetch in two parts due to 300 items limit (380 matches in total)
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/bra.1/scoreboard?dates=20260401-20260815&limit=250&lang=pt');
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/bra.1/scoreboard?dates=20260816-20261215&limit=250&lang=pt');
+    } else if (league === 'uefa.champions') {
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard?dates=20250901-20260615&limit=250&lang=pt');
+    } else if (league === 'eng.1') {
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=20250801-20260531&limit=250&lang=pt');
+    } else if (league === 'esp.1') {
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard?dates=20250801-20260531&limit=250&lang=pt');
+    } else {
+      // Fallback
+      urls.push(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard?dates=20260101-20261231&limit=300&lang=pt`);
     }
 
-    const data = await res.json();
-    if (!data.games || !Array.isArray(data.games)) return;
-
-    const db = await getData();
-    let dbChanged = false;
-
-    for (const game of data.games) {
-      const matchId = `wc_${game.id}`;
-      
-      // Mapeia nomes das seleções
-      const teamA = game.home_team_name_en || game.home_team_label;
-      const teamB = game.away_team_name_en || game.away_team_label;
-      if (!teamA || !teamB) continue;
-
-      const date = parseDate(game.local_date, game.stadium_id);
-      const scoreA = game.home_score === 'null' || game.home_score === null ? null : parseInt(game.home_score);
-      const scoreB = game.away_score === 'null' || game.away_score === null ? null : parseInt(game.away_score);
-      
-      let newStatus = 'pending';
-      if (game.finished === 'TRUE' || game.time_elapsed === 'finished') {
-        newStatus = 'finished';
-      } else if (game.time_elapsed === 'live' || (game.finished === 'FALSE' && game.time_elapsed !== 'notstarted' && scoreA !== null)) {
-        newStatus = 'live';
+    const allEvents = [];
+    for (const url of urls) {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(20000)
+      });
+      if (!res.ok) {
+        console.error(`ESPN API returned error for url ${url}:`, res.status);
+        continue;
       }
+      const data = await res.json();
+      if (data.events && Array.isArray(data.events)) {
+        allEvents.push(...data.events);
+      }
+    }
 
-      // Dados de estádio e detalhados
-      const stadiumInfo = STADIUMS_DATA[game.stadium_id] || { name: `Estádio ${game.stadium_id}`, city: "Desconhecida", country: "Desconhecido", capacity: 0 };
+    if (allEvents.length === 0) return;
 
-      let match = db.matches.find(m => m.id === matchId);
+    await runExclusive(async () => {
+      const db = await getData();
+      let dbChanged = false;
 
-      if (!match) {
-        match = {
-          id: matchId,
-          teamA,
-          teamB,
-          date,
-          scoreA,
-          scoreB,
-          status: newStatus,
-          home_scorers: game.home_scorers,
-          away_scorers: game.away_scorers,
-          group: game.group,
-          matchday: game.matchday,
-          stadiumName: stadiumInfo.name,
-          stadiumCity: stadiumInfo.city,
-          stadiumCountry: stadiumInfo.country,
-          stadiumCapacity: stadiumInfo.capacity,
-          createdAt: new Date().toISOString()
-        };
-        db.matches.push(match);
-        dbChanged = true;
-      } else {
-        if (
-          match.status !== newStatus || 
-          match.scoreA !== scoreA || 
-          match.scoreB !== scoreB || 
-          match.home_scorers !== game.home_scorers || 
-          match.away_scorers !== game.away_scorers ||
-          match.date !== date
-        ) {
-          match.scoreA = scoreA;
-          match.scoreB = scoreB;
-          match.status = newStatus;
-          match.date = date;
-          match.home_scorers = game.home_scorers;
-          match.away_scorers = game.away_scorers;
-          match.group = game.group;
-          match.matchday = game.matchday;
-          match.stadiumName = stadiumInfo.name;
-          match.stadiumCity = stadiumInfo.city;
-          match.stadiumCountry = stadiumInfo.country;
-          match.stadiumCapacity = stadiumInfo.capacity;
+      for (const e of allEvents) {
+        const comp = e.competitions[0];
+        const homeCompetitor = comp.competitors.find(c => c.homeAway === 'home');
+        const awayCompetitor = comp.competitors.find(c => c.homeAway === 'away');
+        if (!homeCompetitor || !awayCompetitor) continue;
+
+        const espnHome = normalizeTeam(homeCompetitor.team.displayName);
+        const espnAway = normalizeTeam(awayCompetitor.team.displayName);
+
+        // Find match in DB
+        const targetId = `espn_${e.id}`;
+        let match = db.matches.find(m => m.id === targetId);
+        if (!match) {
+          match = db.matches.find(m => {
+            const mLeague = m.league || 'fifa.world';
+            if (mLeague !== league) return false;
+
+            const dbHome = normalizeTeam(m.teamA);
+            const dbAway = normalizeTeam(m.teamB);
+            const teamsMatch = (dbHome === espnHome && dbAway === espnAway) || (dbHome === espnAway && dbAway === espnHome);
+            if (teamsMatch) return true;
+
+            const dateDiffMin = Math.abs(new Date(m.date) - new Date(e.date)) / 60000;
+            if (dateDiffMin < 60) {
+              const isKnockout = m.group === 'R32' || m.group === 'R16' || m.group === 'QF' || m.group === 'SF' || m.group === '3RD' || m.group === 'FINAL';
+              const espnIsKnockout = espnHome.includes("Winner") || espnHome.includes("Place") || espnAway.includes("Winner") || espnAway.includes("Place");
+              if (isKnockout || espnIsKnockout) return true;
+            }
+            return false;
+          });
+        }
+
+
+        // Map ESPN status to DB status
+        let newStatus = 'pending';
+        const espnState = e.status.type.state;
+        const espnStateName = e.status.type.name;
+
+        if (espnState === 'post') {
+          newStatus = 'finished';
+        } else if (espnState === 'in' || espnStateName === 'STATUS_IN_PROGRESS' || espnStateName === 'STATUS_LIVE_HOVER') {
+          newStatus = 'live';
+        }
+
+        // Extract match clock/minute info from ESPN
+        let matchClock = null;
+        if (newStatus === 'live') {
+          // shortDetail gives nicely formatted strings like "1st Half 23'", "HT", "2nd Half 67'"
+          matchClock = e.status?.type?.shortDetail || e.status?.displayClock || null;
+        } else if (newStatus === 'finished') {
+          matchClock = 'FT';
+        }
+
+        const scoreA = homeCompetitor.score === 'null' || homeCompetitor.score === null || homeCompetitor.score === undefined ? null : parseInt(homeCompetitor.score);
+        const scoreB = awayCompetitor.score === 'null' || awayCompetitor.score === null || awayCompetitor.score === undefined ? null : parseInt(awayCompetitor.score);
+
+        let homeScorers = extractScorers(comp, homeCompetitor.team.id);
+        let awayScorers = extractScorers(comp, awayCompetitor.team.id);
+
+        // Fetch detailed scorers if the match is live/finished and we don't have them yet
+        if ((newStatus === 'live' || newStatus === 'finished') && homeScorers === 'null') {
+          const details = await fetchMatchDetailsFromESPN(league, e.id);
+          if (details) {
+            homeScorers = details.homeScorers;
+            awayScorers = details.awayScorers;
+          }
+        }
+
+        if (!match) {
+          // Create new match in DB if it doesn't exist
+          match = {
+            id: `espn_${e.id}`,
+            teamA: espnHome,
+            teamB: espnAway,
+            teamALogo: homeCompetitor.team.logo || null,
+            teamBLogo: awayCompetitor.team.logo || null,
+            date: new Date(e.date).toISOString(),
+            scoreA: scoreA,
+            scoreB: scoreB,
+            status: newStatus,
+            matchClock: matchClock,
+            home_scorers: homeScorers,
+            away_scorers: awayScorers,
+            group: e.competitions[0].groups || '', 
+            matchday: String(e.competitions[0].status?.period || '1'),
+            stadiumName: e.competitions[0].venue ? e.competitions[0].venue.displayName : '',
+            stadiumCity: e.competitions[0].venue && e.competitions[0].venue.address ? e.competitions[0].venue.address.city : '',
+            stadiumCountry: e.competitions[0].venue && e.competitions[0].venue.address ? e.competitions[0].venue.address.country : '',
+            stadiumCapacity: 0,
+            league: league,
+            createdAt: new Date().toISOString()
+          };
+          db.matches.push(match);
+          dbChanged = true;
+        } else {
+          // Skip manually updated matches
+          if (match.manuallyUpdated) {
+            continue;
+          }
+
+          const isHomeTeamA = normalizeTeam(homeCompetitor.team.displayName) === normalizeTeam(match.teamA);
+          const logoA = isHomeTeamA ? homeCompetitor.team.logo : awayCompetitor.team.logo;
+          const logoB = isHomeTeamA ? awayCompetitor.team.logo : homeCompetitor.team.logo;
+
+          const realTeamA = isHomeTeamA ? espnHome : espnAway;
+          const realTeamB = isHomeTeamA ? espnAway : espnHome;
+
+          const realScoreA = isHomeTeamA ? scoreA : scoreB;
+          const realScoreB = isHomeTeamA ? scoreB : scoreA;
+          
+          let realHomeScorers = isHomeTeamA ? homeScorers : awayScorers;
+          let realAwayScorers = isHomeTeamA ? awayScorers : homeScorers;
+
+          // Fetch detailed scorers if needed and not already present in the database match
+          if ((newStatus === 'live' || newStatus === 'finished') && 
+              (realHomeScorers === 'null' || !realHomeScorers) && 
+              (!match.home_scorers || match.home_scorers === 'null' || match.home_scorers === '{}')) {
+            const details = await fetchMatchDetailsFromESPN(league, e.id);
+            if (details) {
+              realHomeScorers = isHomeTeamA ? details.homeScorers : details.awayScorers;
+              realAwayScorers = isHomeTeamA ? details.awayScorers : details.homeScorers;
+            }
+          }
+
+          // If the ESPN API returned "null" for scorers but we ALREADY have scorers in the database, keep them!
+          if (realHomeScorers === 'null' && match.home_scorers && match.home_scorers !== 'null' && match.home_scorers !== '{}') {
+            realHomeScorers = match.home_scorers;
+          }
+          if (realAwayScorers === 'null' && match.away_scorers && match.away_scorers !== 'null' && match.away_scorers !== '{}') {
+            realAwayScorers = match.away_scorers;
+          }
+
+          if (
+            match.status !== newStatus || 
+            match.scoreA !== realScoreA || 
+            match.scoreB !== realScoreB || 
+            match.home_scorers !== realHomeScorers || 
+            match.away_scorers !== realAwayScorers ||
+            match.teamALogo !== (logoA || null) ||
+            match.teamBLogo !== (logoB || null) ||
+            match.teamA !== realTeamA ||
+            match.teamB !== realTeamB ||
+            match.matchClock !== matchClock
+          ) {
+            match.scoreA = realScoreA;
+            match.scoreB = realScoreB;
+            match.status = newStatus;
+            match.matchClock = matchClock;
+            match.home_scorers = realHomeScorers;
+            match.away_scorers = realAwayScorers;
+            match.teamALogo = logoA || null;
+            match.teamBLogo = logoB || null;
+            match.teamA = realTeamA;
+            match.teamB = realTeamB;
+            dbChanged = true;
+          }
+        }
+
+        // Se o jogo acabou e ainda não computou os palpites localmente
+        if (newStatus === 'finished' && db.guesses.some(g => g.matchId === match.id && g.points === null)) {
+          db.guesses = db.guesses.map(guess => {
+            if (guess.matchId === match.id) {
+              const isHomeTeamA = normalizeTeam(homeCompetitor.team.displayName) === normalizeTeam(match.teamA);
+              const finalScoreA = isHomeTeamA ? scoreA : scoreB;
+              const finalScoreB = isHomeTeamA ? scoreB : scoreA;
+              const points = calculatePoints(guess.scoreA, guess.scoreB, finalScoreA, finalScoreB);
+              return { ...guess, points };
+            }
+            return guess;
+          });
           dbChanged = true;
         }
       }
 
-      // Se o jogo acabou na API e ainda não computou os palpites localmente
-      if (newStatus === 'finished' && db.guesses.some(g => g.matchId === match.id && g.points === null)) {
-        db.guesses = db.guesses.map(guess => {
-          if (guess.matchId === match.id) {
-            const points = calculatePoints(guess.scoreA, guess.scoreB, scoreA, scoreB);
-            return { ...guess, points };
-          }
-          return guess;
-        });
-        dbChanged = true;
+      if (dbChanged) {
+        await saveData(db);
       }
-    }
+    });
 
-    if (dbChanged) {
-      await saveData(db);
-    }
-    lastSyncTime = now;
-    console.log('Database successfully synced with WorldCup26.ir API.');
+    lastSyncTimes[league] = now;
+    console.log(`Database successfully synced with ESPN API for league: ${league}`);
   } catch (error) {
-    console.error('Error syncing with WorldCup26 API:', error);
+    console.error(`Error syncing with ESPN API for league ${league}:`, error);
+  } finally {
+    delete syncPromises[league];
+    if (resolveSync) resolveSync();
   }
 }
 
@@ -263,30 +768,33 @@ app.post('/api/login', async (req, res) => {
   const role = upperCode === 'ADMIN' ? 'admin' : 'player';
 
   try {
-    const db = await getData();
-    
-    // Check if user already exists
-    let user = db.users.find(u => u.name.toLowerCase() === trimmedName.toLowerCase());
-    
-    if (!user) {
-      // Add new user
-      user = {
-        id: generateId(),
-        name: trimmedName,
-        role: role,
-        createdAt: new Date().toISOString()
-      };
-      db.users.push(user);
-      await saveData(db);
-    } else {
-      // If user exists, optionally update role if logged in with admin code
-      if (role === 'admin' && user.role !== 'admin') {
-        user.role = 'admin';
+    let user;
+    await runExclusive(async () => {
+      const db = await getData();
+      
+      // Check if user already exists
+      user = db.users.find(u => u.name.toLowerCase() === trimmedName.toLowerCase());
+      
+      if (!user) {
+        // Add new user
+        user = {
+          id: generateId(),
+          name: trimmedName,
+          role: role,
+          createdAt: new Date().toISOString()
+        };
+        db.users.push(user);
         await saveData(db);
+      } else {
+        // If user exists, optionally update role if logged in with admin code
+        if (role === 'admin' && user.role !== 'admin') {
+          user.role = 'admin';
+          await saveData(db);
+        }
       }
-    }
+    });
 
-    res.json({ name: user.name, role: user.role });
+    res.json({ id: user.id, name: user.name, role: user.role });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Erro no servidor durante o login.' });
@@ -295,12 +803,13 @@ app.post('/api/login', async (req, res) => {
 
 // 2. Obter todas as partidas e os palpites do usuário atual
 app.get('/api/matches', async (req, res) => {
-  const { userName } = req.query;
+  const { userName, league = 'fifa.world' } = req.query;
 
   try {
-    await syncWithWorldCupAPI();
+    await syncWithWorldCupAPI(league);
     const db = await getData();
-    const matches = db.matches;
+    // Filter matches for the selected league
+    const matches = db.matches.filter(m => (m.league || 'fifa.world') === league);
     const guesses = db.guesses;
 
     // Map matches and attach current user's guess, and list of other guesses if match is locked
@@ -339,7 +848,7 @@ app.get('/api/matches', async (req, res) => {
 
 // 3. Cadastrar nova partida (Admin)
 app.post('/api/matches', async (req, res) => {
-  const { teamA, teamB, date, requesterRole } = req.body;
+  const { teamA, teamB, date, requesterRole, league = 'fifa.world' } = req.body;
 
   if (requesterRole !== 'admin') {
     return res.status(403).json({ error: 'Apenas administradores podem cadastrar jogos.' });
@@ -350,20 +859,35 @@ app.post('/api/matches', async (req, res) => {
   }
 
   try {
-    const db = await getData();
+    const translatedA = translateTeam(teamA.trim());
+    const translatedB = translateTeam(teamB.trim());
+
+    // Fetch logos concurrently
+    const [logoA, logoB] = await Promise.all([
+      fetchTeamLogo(translatedA).catch(() => null),
+      fetchTeamLogo(translatedB).catch(() => null)
+    ]);
+
     const newMatch = {
       id: generateId(),
-      teamA: teamA.trim(),
-      teamB: teamB.trim(),
+      teamA: translatedA,
+      teamB: translatedB,
+      teamALogo: logoA || null,
+      teamBLogo: logoB || null,
       date: new Date(date).toISOString(),
       scoreA: null,
       scoreB: null,
       status: 'pending', // pending, finished
+      league: league,
       createdAt: new Date().toISOString()
     };
 
-    db.matches.push(newMatch);
-    await saveData(db);
+    await runExclusive(async () => {
+      const db = await getData();
+      db.matches.push(newMatch);
+      await saveData(db);
+    });
+
     res.status(201).json(newMatch);
   } catch (error) {
     console.error('Error creating match:', error);
@@ -380,48 +904,61 @@ app.post('/api/guesses', async (req, res) => {
   }
 
   try {
-    const db = await getData();
-    const match = db.matches.find(m => m.id === matchId);
+    let resultGuess;
+    let errorResponse = null;
 
-    if (!match) {
-      return res.status(404).json({ error: 'Partida não encontrada.' });
+    await runExclusive(async () => {
+      const db = await getData();
+      const match = db.matches.find(m => m.id === matchId);
+
+      if (!match) {
+        errorResponse = { status: 404, error: 'Partida não encontrada.' };
+        return;
+      }
+
+      // Check if match already started
+      const isLocked = match.status === 'finished' || new Date(match.date) < new Date();
+      if (isLocked && requesterRole !== 'admin') {
+        errorResponse = { status: 400, error: 'As apostas para este jogo já estão encerradas.' };
+        return;
+      }
+
+      // Find or create guess
+      let guess = db.guesses.find(g => g.matchId === matchId && g.userName.toLowerCase() === userName.toLowerCase());
+
+      if (guess) {
+        guess.scoreA = parseInt(scoreA);
+        guess.scoreB = parseInt(scoreB);
+        guess.updatedAt = new Date().toISOString();
+      } else {
+        guess = {
+          id: `${userName.toLowerCase()}_${matchId}`,
+          userName: userName.trim(),
+          matchId,
+          scoreA: parseInt(scoreA),
+          scoreB: parseInt(scoreB),
+          points: null,
+          createdAt: new Date().toISOString()
+        };
+        db.guesses.push(guess);
+      }
+
+      // Se o jogo já acabou, calcula os pontos do palpite imediatamente
+      if (match.status === 'finished') {
+        guess.points = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
+      } else {
+        guess.points = null;
+      }
+
+      await saveData(db);
+      resultGuess = guess;
+    });
+
+    if (errorResponse) {
+      return res.status(errorResponse.status).json({ error: errorResponse.error });
     }
 
-    // Check if match already started
-    const isLocked = match.status === 'finished' || new Date(match.date) < new Date();
-    if (isLocked && requesterRole !== 'admin') {
-      return res.status(400).json({ error: 'As apostas para este jogo já estão encerradas.' });
-    }
-
-    // Find or create guess
-    let guess = db.guesses.find(g => g.matchId === matchId && g.userName.toLowerCase() === userName.toLowerCase());
-
-    if (guess) {
-      guess.scoreA = parseInt(scoreA);
-      guess.scoreB = parseInt(scoreB);
-      guess.updatedAt = new Date().toISOString();
-    } else {
-      guess = {
-        id: `${userName.toLowerCase()}_${matchId}`,
-        userName: userName.trim(),
-        matchId,
-        scoreA: parseInt(scoreA),
-        scoreB: parseInt(scoreB),
-        points: null,
-        createdAt: new Date().toISOString()
-      };
-      db.guesses.push(guess);
-    }
-
-    // Se o jogo já acabou, calcula os pontos do palpite imediatamente
-    if (match.status === 'finished') {
-      guess.points = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
-    } else {
-      guess.points = null;
-    }
-
-    await saveData(db);
-    res.json(guess);
+    res.json(resultGuess);
   } catch (error) {
     console.error('Error saving guess:', error);
     res.status(500).json({ error: 'Erro ao salvar palpite.' });
@@ -444,57 +981,130 @@ app.post('/api/results', async (req, res) => {
   const finalScoreB = parseInt(scoreB);
 
   try {
-    const db = await getData();
-    const match = db.matches.find(m => m.id === matchId);
+    let resultMatch;
+    let errorResponse = null;
 
-    if (!match) {
-      return res.status(404).json({ error: 'Partida não encontrada.' });
-    }
+    await runExclusive(async () => {
+      const db = await getData();
+      const match = db.matches.find(m => m.id === matchId);
 
-    // Update match result
-    match.scoreA = finalScoreA;
-    match.scoreB = finalScoreB;
-    match.status = 'finished';
-    match.resultUpdatedAt = new Date().toISOString();
-
-    // Calculate points for all guesses for this match
-    db.guesses = db.guesses.map(guess => {
-      if (guess.matchId === matchId) {
-        const points = calculatePoints(guess.scoreA, guess.scoreB, finalScoreA, finalScoreB);
-        return {
-          ...guess,
-          points
-        };
+      if (!match) {
+        errorResponse = { status: 404, error: 'Partida não encontrada.' };
+        return;
       }
-      return guess;
+
+      // Update match result
+      match.scoreA = finalScoreA;
+      match.scoreB = finalScoreB;
+      match.status = 'finished';
+      match.resultUpdatedAt = new Date().toISOString();
+      match.manuallyUpdated = true;
+
+      // Calculate points for all guesses for this match
+      db.guesses = db.guesses.map(guess => {
+        if (guess.matchId === matchId) {
+          const points = calculatePoints(guess.scoreA, guess.scoreB, finalScoreA, finalScoreB);
+          return {
+            ...guess,
+            points
+          };
+        }
+        return guess;
+      });
+
+      await saveData(db);
+      resultMatch = match;
     });
 
-    await saveData(db);
-    res.json({ message: 'Resultado registrado e pontos calculados com sucesso!', match });
+    if (errorResponse) {
+      return res.status(errorResponse.status).json({ error: errorResponse.error });
+    }
+
+    res.json({ message: 'Resultado registrado e pontos calculados com sucesso!', match: resultMatch });
   } catch (error) {
     console.error('Error recording result:', error);
     res.status(500).json({ error: 'Erro ao registrar resultado.' });
   }
 });
 
+// 5.1 Reativar Sincronização Automática (Admin)
+app.post('/api/admin/matches/unlock-sync', async (req, res) => {
+  const { matchId, requesterRole } = req.body;
+
+  if (requesterRole !== 'admin') {
+    return res.status(403).json({ error: 'Apenas administradores podem reativar a sincronização.' });
+  }
+
+  try {
+    let resultMatch;
+    let errorResponse = null;
+
+    await runExclusive(async () => {
+      const db = await getData();
+      const match = db.matches.find(m => m.id === matchId);
+
+      if (!match) {
+        errorResponse = { status: 404, error: 'Partida não encontrada.' };
+        return;
+      }
+
+      match.manuallyUpdated = false;
+      await saveData(db);
+      resultMatch = match;
+    });
+
+    if (errorResponse) {
+      return res.status(errorResponse.status).json({ error: errorResponse.error });
+    }
+
+    res.json({ message: 'Sincronização automática reativada!', match: resultMatch });
+  } catch (error) {
+    console.error('Error unlocking sync:', error);
+    res.status(500).json({ error: 'Erro ao reativar sincronização.' });
+  }
+});
+
 // 6. Obter Ranking de Classificação
 app.get('/api/ranking', async (req, res) => {
+  const { league = 'fifa.world' } = req.query;
+
   try {
     const db = await getData();
     const users = db.users;
     const guesses = db.guesses;
 
+    // Filter matches that belong to this league
+    const leagueMatches = db.matches.filter(m => (m.league || 'fifa.world') === league);
+    const leagueMatchIds = new Set(leagueMatches.map(m => m.id));
+
     // Calculate scores for each user
     const ranking = users.map(user => {
-      const userGuesses = guesses.filter(g => g.userName.toLowerCase() === user.name.toLowerCase() && g.points !== null);
+      const userGuesses = guesses.filter(g => 
+        g.userName.toLowerCase() === user.name.toLowerCase() && 
+        g.points !== null &&
+        leagueMatchIds.has(g.matchId)
+      );
       
-      const pointsAdjustment = parseInt(user.pointsAdjustment) || 0;
+      // Determine pointsAdjustment for this league
+      let pointsAdjustment = 0;
+      if (user.pointsAdjustment !== undefined) {
+        if (typeof user.pointsAdjustment === 'object' && user.pointsAdjustment !== null) {
+          pointsAdjustment = parseInt(user.pointsAdjustment[league]) || 0;
+        } else if (league === 'fifa.world') {
+          // Backward compatibility for when it was a single number
+          pointsAdjustment = parseInt(user.pointsAdjustment) || 0;
+        }
+      }
+
       const totalPoints = userGuesses.reduce((sum, g) => sum + g.points, 0);
       const exactScores = userGuesses.filter(g => g.points === 25).length;
       const winnerDiff = userGuesses.filter(g => g.points === 18).length;
       const winnerGoals = userGuesses.filter(g => g.points === 15 || g.points === 12).length;
       const winnerOnly = userGuesses.filter(g => g.points === 10).length;
-      const totalGuesses = guesses.filter(g => g.userName.toLowerCase() === user.name.toLowerCase()).length;
+      const totalGuesses = guesses.filter(g => 
+        g.userName.toLowerCase() === user.name.toLowerCase() &&
+        leagueMatchIds.has(g.matchId)
+      ).length;
 
       // Live projection
       let livePoints = 0;
@@ -503,7 +1113,7 @@ app.get('/api/ranking', async (req, res) => {
       let projectedWinnerGoals = 0;
       let projectedWinnerOnly = 0;
 
-      const liveMatches = db.matches.filter(m => m.status === 'live');
+      const liveMatches = leagueMatches.filter(m => m.status === 'live');
       liveMatches.forEach(match => {
         const guess = guesses.find(g => g.matchId === match.id && g.userName.toLowerCase() === user.name.toLowerCase());
         if (guess && match.scoreA !== null && match.scoreB !== null) {
@@ -554,7 +1164,7 @@ app.get('/api/ranking', async (req, res) => {
 
 // 6.1 Ajustar Pontuação Manualmente (Admin)
 app.post('/api/users/adjust-points', async (req, res) => {
-  const { userId, pointsAdjustment, requesterRole } = req.body;
+  const { userId, pointsAdjustment, league = 'fifa.world', requesterRole } = req.body;
 
   if (requesterRole !== 'admin') {
     return res.status(403).json({ error: 'Apenas administradores podem ajustar pontuações.' });
@@ -565,16 +1175,34 @@ app.post('/api/users/adjust-points', async (req, res) => {
   }
 
   try {
-    const db = await getData();
-    const user = db.users.find(u => u.id === userId);
+    let resultUser;
+    let errorResponse = null;
 
-    if (!user) {
-      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    await runExclusive(async () => {
+      const db = await getData();
+      const user = db.users.find(u => u.id === userId);
+
+      if (!user) {
+        errorResponse = { status: 404, error: 'Usuário não encontrado.' };
+        return;
+      }
+
+      // Convert old single-number pointsAdjustment to object if needed
+      if (!user.pointsAdjustment || typeof user.pointsAdjustment !== 'object') {
+        const oldAdj = typeof user.pointsAdjustment === 'number' ? user.pointsAdjustment : 0;
+        user.pointsAdjustment = { 'fifa.world': oldAdj };
+      }
+
+      user.pointsAdjustment[league] = parseInt(pointsAdjustment) || 0;
+      await saveData(db);
+      resultUser = user;
+    });
+
+    if (errorResponse) {
+      return res.status(errorResponse.status).json({ error: errorResponse.error });
     }
 
-    user.pointsAdjustment = parseInt(pointsAdjustment) || 0;
-    await saveData(db);
-    res.json({ message: 'Pontuação ajustada com sucesso!', user });
+    res.json({ message: 'Pontuação ajustada com sucesso!', user: resultUser });
   } catch (error) {
     console.error('Error adjusting points:', error);
     res.status(500).json({ error: 'Erro ao ajustar pontuação.' });
@@ -583,40 +1211,51 @@ app.post('/api/users/adjust-points', async (req, res) => {
 
 // 6.2 Recalcular Todos os Pontos do Bolão (Admin)
 app.post('/api/admin/recalculate', async (req, res) => {
-  const { requesterRole } = req.body;
+  const { requesterRole, league = 'fifa.world' } = req.body;
 
   if (requesterRole !== 'admin') {
     return res.status(403).json({ error: 'Apenas administradores podem recalcular os pontos.' });
   }
 
   try {
-    const db = await getData();
     let count = 0;
+    await runExclusive(async () => {
+      const db = await getData();
 
-    db.guesses = db.guesses.map(guess => {
-      const match = db.matches.find(m => m.id === guess.matchId);
-      if (!match) {
-        return guess;
-      }
+      // Filter matches that belong to this league
+      const leagueMatchIds = new Set(db.matches.filter(m => (m.league || 'fifa.world') === league).map(m => m.id));
 
-      if (match.status === 'finished') {
-        const points = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
-        if (guess.points !== points) {
-          count++;
+      db.guesses = db.guesses.map(guess => {
+        // Skip guesses not belonging to the league
+        if (!leagueMatchIds.has(guess.matchId)) {
+          return guess;
         }
-        return { ...guess, points };
-      } else {
-        // Para jogos não encerrados, a pontuação oficial deve ser nula
-        const oldPoints = guess.points;
-        if (oldPoints !== null) {
-          count++;
+
+        const match = db.matches.find(m => m.id === guess.matchId);
+        if (!match) {
+          return guess;
         }
-        return { ...guess, points: null };
-      }
+
+        if (match.status === 'finished') {
+          const points = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
+          if (guess.points !== points) {
+            count++;
+          }
+          return { ...guess, points };
+        } else {
+          // Para jogos não encerrados, a pontuação oficial deve ser nula
+          const oldPoints = guess.points;
+          if (oldPoints !== null) {
+            count++;
+          }
+          return { ...guess, points: null };
+        }
+      });
+
+      await saveData(db);
     });
 
-    await saveData(db);
-    res.json({ message: `Recálculo concluído com sucesso! ${count} palpites atualizados.` });
+    res.json({ message: `Recálculo concluído com sucesso! ${count} palpites atualizados para a liga ${league}.` });
   } catch (error) {
     console.error('Error recalculating points:', error);
     res.status(500).json({ error: 'Erro ao recalcular pontos.' });
@@ -651,95 +1290,111 @@ app.post('/api/data/import', async (req, res) => {
   }
 
   try {
-    await saveData(data);
+    await runExclusive(async () => {
+      await saveData(data);
+    });
     res.json({ message: 'Dados importados com sucesso!' });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao importar dados.' });
   }
 });
 
-// 8. Importar Tabela da Copa 2026 (Admin)
+// 8. Importar Tabela de Campeonatos (Admin)
 app.post('/api/copa2026/sync', async (req, res) => {
-  const { requesterRole } = req.body;
+  const { requesterRole, league = 'fifa.world' } = req.body;
 
   if (requesterRole !== 'admin') {
-    return res.status(403).json({ error: 'Apenas administradores podem carregar jogos da Copa.' });
+    return res.status(403).json({ error: 'Apenas administradores podem carregar jogos.' });
   }
 
   try {
-    lastSyncTime = 0; // Reseta cache para forçar a busca na API pública agora
-    await syncWithWorldCupAPI();
+    lastSyncTimes[league] = 0; // Reseta cache para forçar a busca na API pública agora
+    await syncWithWorldCupAPI(league);
     const db = await getData();
-    res.json({ message: `Jogos da Copa de 2026 sincronizados em tempo real! Total no sistema: ${db.matches.length} partidas.` });
+    const count = db.matches.filter(m => (m.league || 'fifa.world') === league).length;
+    res.json({ message: `Jogos sincronizados com sucesso! Total no sistema para esta liga: ${count} partidas.` });
   } catch (error) {
-    console.error('Error manual sync WC matches:', error);
-    res.status(500).json({ error: 'Erro ao sincronizar jogos da Copa.' });
+    console.error('Error manual sync matches:', error);
+    res.status(500).json({ error: 'Erro ao sincronizar jogos.' });
   }
 });
 
 // 9. Simular Progresso dos Jogos (Admin - Testes e Demonstrações)
 app.post('/api/copa2026/simulate-live', async (req, res) => {
-  const { requesterRole } = req.body;
+  const { requesterRole, league = 'fifa.world' } = req.body;
 
   if (requesterRole !== 'admin') {
     return res.status(403).json({ error: 'Apenas administradores podem simular jogos.' });
   }
 
   try {
-    const db = await getData();
-    if (db.matches.length === 0) {
-      return res.status(400).json({ error: 'Nenhum jogo cadastrado para simular. Carregue os jogos da Copa primeiro.' });
-    }
-
-    let changed = false;
     let message = '';
+    let resultMatches = [];
+    let errorResponse = null;
 
-    // Procura por um jogo ao vivo para atualizar
-    let liveMatch = db.matches.find(m => m.status === 'live');
-
-    if (liveMatch) {
-      // 50% de chance de gol, 50% de encerrar a partida
-      if (Math.random() > 0.5) {
-        const isTeamA = Math.random() > 0.5;
-        if (isTeamA) {
-          liveMatch.scoreA = (liveMatch.scoreA || 0) + 1;
-        } else {
-          liveMatch.scoreB = (liveMatch.scoreB || 0) + 1;
-        }
-        message = `GOL! Placar atualizado: ${liveMatch.teamA} ${liveMatch.scoreA} x ${liveMatch.scoreB} ${liveMatch.teamB}`;
-      } else {
-        liveMatch.status = 'finished';
-        message = `FIM DE JOGO! Placar oficial: ${liveMatch.teamA} ${liveMatch.scoreA} x ${liveMatch.scoreB} ${liveMatch.teamB}. Pontuações calculadas!`;
-
-        // Calcula pontos para todos os palpites
-        db.guesses = db.guesses.map(guess => {
-          if (guess.matchId === liveMatch.id) {
-            const points = calculatePoints(guess.scoreA, guess.scoreB, liveMatch.scoreA, liveMatch.scoreB);
-            return { ...guess, points };
-          }
-          return guess;
-        });
+    await runExclusive(async () => {
+      const db = await getData();
+      const leagueMatches = db.matches.filter(m => (m.league || 'fifa.world') === league);
+      
+      if (leagueMatches.length === 0) {
+        errorResponse = { status: 400, error: `Nenhum jogo cadastrado para simular na liga ${league}.` };
+        return;
       }
-      changed = true;
-    } else {
-      // Nenhum jogo ao vivo, inicia um pendente
-      let pendingMatch = db.matches.find(m => m.status === 'pending');
-      if (pendingMatch) {
-        pendingMatch.status = 'live';
-        pendingMatch.scoreA = 0;
-        pendingMatch.scoreB = 0;
-        message = `BOLA ROLANDO! O jogo ${pendingMatch.teamA} vs ${pendingMatch.teamB} começou e está AO VIVO!`;
+
+      let changed = false;
+
+      // Procura por um jogo ao vivo para atualizar nesta liga
+      let liveMatch = leagueMatches.find(m => m.status === 'live');
+
+      if (liveMatch) {
+        // 50% de chance de gol, 50% de encerrar a partida
+        if (Math.random() > 0.5) {
+          const isTeamA = Math.random() > 0.5;
+          if (isTeamA) {
+            liveMatch.scoreA = (liveMatch.scoreA || 0) + 1;
+          } else {
+            liveMatch.scoreB = (liveMatch.scoreB || 0) + 1;
+          }
+          message = `GOL! Placar atualizado: ${liveMatch.teamA} ${liveMatch.scoreA} x ${liveMatch.scoreB} ${liveMatch.teamB}`;
+        } else {
+          liveMatch.status = 'finished';
+          message = `FIM DE JOGO! Placar oficial: ${liveMatch.teamA} ${liveMatch.scoreA} x ${liveMatch.scoreB} ${liveMatch.teamB}. Pontuações calculadas!`;
+
+          // Calcula pontos para todos os palpites
+          db.guesses = db.guesses.map(guess => {
+            if (guess.matchId === liveMatch.id) {
+              const points = calculatePoints(guess.scoreA, guess.scoreB, liveMatch.scoreA, liveMatch.scoreB);
+              return { ...guess, points };
+            }
+            return guess;
+          });
+        }
         changed = true;
       } else {
-        message = 'Todos os jogos cadastrados já estão encerrados!';
+        // Nenhum jogo ao vivo, inicia um pendente
+        let pendingMatch = leagueMatches.find(m => m.status === 'pending');
+        if (pendingMatch) {
+          pendingMatch.status = 'live';
+          pendingMatch.scoreA = 0;
+          pendingMatch.scoreB = 0;
+          message = `BOLA ROLANDO! O jogo ${pendingMatch.teamA} vs ${pendingMatch.teamB} começou e está AO VIVO!`;
+          changed = true;
+        } else {
+          message = 'Todos os jogos cadastrados já estão encerrados!';
+        }
       }
+
+      if (changed) {
+        await saveData(db);
+      }
+      resultMatches = db.matches.filter(m => (m.league || 'fifa.world') === league);
+    });
+
+    if (errorResponse) {
+      return res.status(errorResponse.status).json({ error: errorResponse.error });
     }
 
-    if (changed) {
-      await saveData(db);
-    }
-
-    res.json({ message, matches: db.matches });
+    res.json({ message, matches: resultMatches });
   } catch (error) {
     console.error('Error simulating live match:', error);
     res.status(500).json({ error: 'Erro ao simular progresso do jogo.' });
