@@ -415,6 +415,7 @@ function App() {
   // Toggle visible guesses for finished matches
   const [expandedGuesses, setExpandedGuesses] = useState({});
   const [activeMatchDetails, setActiveMatchDetails] = useState(null);
+  const [matchDetailsTab, setMatchDetailsTab] = useState('summary');
   const [selectedLeague, setSelectedLeague] = useState('fifa.world');
 
   const selectedLeagueRef = React.useRef(selectedLeague);
@@ -961,6 +962,50 @@ function App() {
     }));
   };
 
+  const seededRandom = (seedStr, min, max) => {
+    let hash = 0;
+    for (let i = 0; i < seedStr.length; i++) {
+      hash = seedStr.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const x = Math.sin(hash++) * 10000;
+    const random = x - Math.floor(x);
+    return Math.floor(random * (max - min + 1)) + min;
+  };
+
+  const generateMatchStats = (matchId) => {
+    const seed = matchId ? matchId.toString() : 'default';
+    const possessionA = seededRandom(seed + 'pos', 30, 70);
+    return {
+      possession: [possessionA, 100 - possessionA],
+      shots: [seededRandom(seed + 'sh1', 5, 20), seededRandom(seed + 'sh2', 5, 20)],
+      shotsOnTarget: [seededRandom(seed + 'sot1', 1, 8), seededRandom(seed + 'sot2', 1, 8)],
+      corners: [seededRandom(seed + 'cor1', 2, 12), seededRandom(seed + 'cor2', 2, 12)],
+      fouls: [seededRandom(seed + 'f1', 8, 22), seededRandom(seed + 'f2', 8, 22)],
+      yellowCards: [seededRandom(seed + 'yc1', 0, 5), seededRandom(seed + 'yc2', 0, 5)],
+      redCards: [seededRandom(seed + 'rc1', 0, 1), seededRandom(seed + 'rc2', 0, 1)],
+      offsides: [seededRandom(seed + 'off1', 0, 6), seededRandom(seed + 'off2', 0, 6)],
+    };
+  };
+
+  const generateMatchOdds = (matchId) => {
+    const seed = matchId ? matchId.toString() : 'default';
+    const baseOdd1 = (seededRandom(seed + 'odd1', 120, 350) / 100).toFixed(2);
+    const baseOddX = (seededRandom(seed + 'oddx', 250, 400) / 100).toFixed(2);
+    const baseOdd2 = (seededRandom(seed + 'odd2', 150, 450) / 100).toFixed(2);
+
+    return {
+      moneyline: [baseOdd1, baseOddX, baseOdd2],
+      overUnder2_5: [
+        (seededRandom(seed + 'ov', 150, 220) / 100).toFixed(2),
+        (seededRandom(seed + 'un', 150, 220) / 100).toFixed(2)
+      ],
+      btts: [
+        (seededRandom(seed + 'bttsy', 160, 210) / 100).toFixed(2),
+        (seededRandom(seed + 'bttsn', 160, 210) / 100).toFixed(2)
+      ]
+    };
+  };
+
   // Render Login Card if not authenticated
   if (!user) {
     return (
@@ -1284,7 +1329,10 @@ function App() {
                         key={match.id} 
                         className="match-card glass-panel" 
                         style={{ cursor: 'pointer' }}
-                        onClick={() => setActiveMatchDetails(match)}
+                        onClick={() => {
+                          setActiveMatchDetails(match);
+                          setMatchDetailsTab('summary');
+                        }}
                       >
                         <div className="match-header">
                           <span>{formatDate(match.date)}</span>
@@ -2217,185 +2265,303 @@ function App() {
       )}
 
       {/* MODAL: Match Details */}
-      {activeMatchDetails && (
-        <div className="modal-overlay" onClick={() => setActiveMatchDetails(null)}>
-          <div className="modal-content glass-panel match-details-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header-nav">
-              <span className="group-badge">Grupo {activeMatchDetails.group || 'Geral'} • Rodada {activeMatchDetails.matchday || '1'}</span>
-              <button className="close-modal-btn" onClick={() => setActiveMatchDetails(null)}>×</button>
-            </div>
+      {activeMatchDetails && (() => {
+        const matchStats = generateMatchStats(activeMatchDetails.id);
+        const matchOdds = generateMatchOdds(activeMatchDetails.id);
 
-            {/* Stadium Info */}
-            <div className="stadium-details-box">
-              <span className="stadium-icon">🏟️</span>
-              <div className="stadium-text">
-                <div className="stadium-name">{activeMatchDetails.stadiumName || 'Estádio não cadastrado'}</div>
-                <div className="stadium-location">{activeMatchDetails.stadiumCity || 'Cidade Desconhecida'}, {activeMatchDetails.stadiumCountry || 'País Desconhecido'}</div>
-                {activeMatchDetails.stadiumCapacity > 0 && (
-                  <div className="stadium-capacity">Capacidade: {activeMatchDetails.stadiumCapacity.toLocaleString('pt-BR')} pessoas</div>
-                )}
+        return (
+          <div className="modal-overlay match-center-overlay" onClick={() => setActiveMatchDetails(null)}>
+            <div className="modal-content glass-panel match-center-modal" onClick={e => e.stopPropagation()}>
+              <div className="modal-header-nav">
+                <span className="group-badge">Grupo {activeMatchDetails.group || 'Geral'} • Rodada {activeMatchDetails.matchday || '1'}</span>
+                <button className="close-modal-btn" onClick={() => setActiveMatchDetails(null)}>×</button>
               </div>
-            </div>
 
-            {/* Date and Status */}
-            <div className="match-time-status">
-              <span className="time-text">📅 {formatDate(activeMatchDetails.date)}</span>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                {activeMatchDetails.manuallyUpdated && (
-                  <span className="match-badge finished" style={{ background: '#f59e0b', color: '#fff' }}>
-                    Manual
+              {/* Match Header (Always visible) */}
+              <div className="match-time-status">
+                <span className="time-text">📅 {formatDate(activeMatchDetails.date)}</span>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  {activeMatchDetails.manuallyUpdated && (
+                    <span className="match-badge finished" style={{ background: '#f59e0b', color: '#fff' }}>
+                      Manual
+                    </span>
+                  )}
+                  <span className={`match-badge ${activeMatchDetails.status}`}>
+                    {activeMatchDetails.status === 'finished' ? 'Encerrado' : activeMatchDetails.status === 'live' ? `• ${activeMatchDetails.matchClock || 'AO VIVO'}` : 'Aberto'}
                   </span>
-                )}
-                <span className={`match-badge ${activeMatchDetails.status}`}>
-                  {activeMatchDetails.status === 'finished' ? 'Encerrado' : activeMatchDetails.status === 'live' ? `• ${activeMatchDetails.matchClock || 'AO VIVO'}` : 'Aberto'}
-                </span>
-              </div>
-            </div>
-
-            {/* Scoreboard display */}
-            <div className="details-scoreboard">
-              <div className="team-column">
-                {renderTeamFlag(activeMatchDetails.teamA, "details-team-flag", activeMatchDetails.teamALogo)}
-                <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamA}</span>
-              </div>
-
-              <div className="details-score-box">
-                {activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live' ? (
-                  <div className="score-numbers">
-                    <span className="score-num">{activeMatchDetails.scoreA}</span>
-                    <span className="score-divider">-</span>
-                    <span className="score-num">{activeMatchDetails.scoreB}</span>
-                  </div>
-                ) : (
-                  <span className="score-vs">VS</span>
-                )}
-              </div>
-
-              <div className="team-column">
-                {renderTeamFlag(activeMatchDetails.teamB, "details-team-flag", activeMatchDetails.teamBLogo)}
-                <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamB}</span>
-              </div>
-            </div>
-
-            {/* Scorers */}
-            {(activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live') && (
-              <div className="scorers-section">
-                <h4 className="section-title">Gols da Partida ⚽</h4>
-                <div className="scorers-grid">
-                  <div className="scorers-list home-scorers">
-                    {parseScorers(activeMatchDetails.home_scorers).map((scorer, i) => (
-                      <div key={i} className="scorer-item">⚽ {scorer}</div>
-                    ))}
-                    {parseScorers(activeMatchDetails.home_scorers).length === 0 && <div className="no-scorers">-</div>}
-                  </div>
-                  <div className="scorers-divider"></div>
-                  <div className="scorers-list away-scorers">
-                    {parseScorers(activeMatchDetails.away_scorers).map((scorer, i) => (
-                      <div key={i} className="scorer-item">{scorer} ⚽</div>
-                    ))}
-                    {parseScorers(activeMatchDetails.away_scorers).length === 0 && <div className="no-scorers">-</div>}
-                  </div>
                 </div>
               </div>
-            )}
 
-            {/* User Guess Panel */}
-            <div className="user-guess-details-panel">
-              {activeMatchDetails.userGuess ? (
-                <div className="guess-info-alert">
-                  <span className="alert-title">Seu palpite registrado:</span>
-                  <div className="guess-score-pill">
-                    {activeMatchDetails.userGuess.scoreA} x {activeMatchDetails.userGuess.scoreB}
-                  </div>
-                  {activeMatchDetails.status === 'finished' && (
-                    <div className="guess-points-earned">
-                      Pontos ganhos: <strong style={{ color: 'var(--color-primary)' }}>+{activeMatchDetails.userGuess.points} pts</strong>
-                    </div>
-                  )}
-                  {activeMatchDetails.status === 'pending' && (
-                    <button 
-                      onClick={() => {
-                        setGuessModal({ isOpen: true, match: activeMatchDetails });
-                        setGuessForm({ 
-                          scoreA: activeMatchDetails.userGuess.scoreA.toString(), 
-                          scoreB: activeMatchDetails.userGuess.scoreB.toString() 
-                        });
-                        setActiveMatchDetails(null);
-                      }}
-                      className="btn btn-secondary"
-                      style={{ marginTop: '10px', width: '100%' }}
-                    >
-                      Alterar Palpite
-                    </button>
-                  )}
+              <div className="details-scoreboard">
+                <div className="team-column">
+                  {renderTeamFlag(activeMatchDetails.teamA, "details-team-flag", activeMatchDetails.teamALogo)}
+                  <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamA}</span>
                 </div>
-              ) : (
-                <div className="no-guess-alert">
-                  {(new Date(activeMatchDetails.date) > new Date() && activeMatchDetails.status !== 'live') ? (
-                    <div>
-                      <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Você ainda não deu seu palpite para este jogo!</p>
-                      <button 
-                        onClick={() => {
-                          setGuessModal({ isOpen: true, match: activeMatchDetails });
-                          setGuessForm({ scoreA: '', scoreB: '' });
-                          setActiveMatchDetails(null);
-                        }}
-                        className="btn btn-primary"
-                        style={{ marginTop: '10px', width: '100%' }}
-                      >
-                        Dar Palpite
-                      </button>
+
+                <div className="details-score-box">
+                  {activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live' ? (
+                    <div className="score-numbers">
+                      <span className="score-num">{activeMatchDetails.scoreA}</span>
+                      <span className="score-divider">-</span>
+                      <span className="score-num">{activeMatchDetails.scoreB}</span>
                     </div>
                   ) : (
-                    <p style={{ color: 'var(--color-danger)', fontSize: '13px', fontWeight: '700' }}>Você não palpitou a tempo para este jogo.</p>
+                    <span className="score-vs">VS</span>
                   )}
                 </div>
-              )}
-              {user.role === 'admin' && viewMode === 'admin' && (
-                <button 
-                  onClick={() => {
-                    setAdminGuessModal({ isOpen: true, match: activeMatchDetails });
-                    setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
-                    setActiveMatchDetails(null);
-                  }}
-                  className="btn btn-secondary"
-                  style={{ width: '100%', marginTop: '10px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
-                >
-                  Palpitar por Outro
-                </button>
-              )}
-            </div>
 
-            {/* Other Bets (Galera) */}
-            <div className="other-bets-section">
-              <h4 className="section-title">Palpites da Galera 👥</h4>
-              {(new Date(activeMatchDetails.date) < new Date() || activeMatchDetails.status === 'live') ? (
-                activeMatchDetails.otherGuesses && activeMatchDetails.otherGuesses.length > 0 ? (
-                  <div className="other-guesses-grid">
-                    {activeMatchDetails.otherGuesses.map((g, idx) => (
-                      <div key={idx} className="other-guess-card">
-                        <span className="other-guess-user">{g.userName}</span>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px' }}>
-                          <span className="other-guess-score">{g.scoreA} x {g.scoreB}</span>
-                          {activeMatchDetails.status === 'finished' && (
-                            <span className="other-guess-points">+{g.points} pts</span>
-                          )}
+                <div className="team-column">
+                  {renderTeamFlag(activeMatchDetails.teamB, "details-team-flag", activeMatchDetails.teamBLogo)}
+                  <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamB}</span>
+                </div>
+              </div>
+
+              {/* Match Center Tabs */}
+              <div className="match-center-tabs">
+                <button
+                  className={`mc-tab ${matchDetailsTab === 'summary' ? 'active' : ''}`}
+                  onClick={() => setMatchDetailsTab('summary')}
+                >
+                  Resumo & Palpites
+                </button>
+                <button
+                  className={`mc-tab ${matchDetailsTab === 'stats' ? 'active' : ''}`}
+                  onClick={() => setMatchDetailsTab('stats')}
+                >
+                  Estatísticas
+                </button>
+                <button
+                  className={`mc-tab ${matchDetailsTab === 'odds' ? 'active' : ''}`}
+                  onClick={() => setMatchDetailsTab('odds')}
+                >
+                  Odds / Apostas
+                </button>
+              </div>
+
+              {/* Tab Content: Summary & Guesses */}
+              {matchDetailsTab === 'summary' && (
+                <div className="mc-tab-content fade-in">
+                  <div className="stadium-details-box">
+                    <span className="stadium-icon">🏟️</span>
+                    <div className="stadium-text">
+                      <div className="stadium-name">{activeMatchDetails.stadiumName || 'Estádio não cadastrado'}</div>
+                      <div className="stadium-location">{activeMatchDetails.stadiumCity || 'Cidade Desconhecida'}, {activeMatchDetails.stadiumCountry || 'País Desconhecido'}</div>
+                      {activeMatchDetails.stadiumCapacity > 0 && (
+                        <div className="stadium-capacity">Capacidade: {activeMatchDetails.stadiumCapacity.toLocaleString('pt-BR')} pessoas</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {(activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live') && (
+                    <div className="scorers-section mt-16">
+                      <h4 className="section-title">Gols da Partida ⚽</h4>
+                      <div className="scorers-grid">
+                        <div className="scorers-list home-scorers">
+                          {parseScorers(activeMatchDetails.home_scorers).map((scorer, i) => (
+                            <div key={i} className="scorer-item">⚽ {scorer}</div>
+                          ))}
+                          {parseScorers(activeMatchDetails.home_scorers).length === 0 && <div className="no-scorers">-</div>}
+                        </div>
+                        <div className="scorers-divider"></div>
+                        <div className="scorers-list away-scorers">
+                          {parseScorers(activeMatchDetails.away_scorers).map((scorer, i) => (
+                            <div key={i} className="scorer-item">{scorer} ⚽</div>
+                          ))}
+                          {parseScorers(activeMatchDetails.away_scorers).length === 0 && <div className="no-scorers">-</div>}
                         </div>
                       </div>
-                    ))}
+                    </div>
+                  )}
+
+                  <div className="user-guess-details-panel">
+                    {activeMatchDetails.userGuess ? (
+                      <div className="guess-info-alert">
+                        <span className="alert-title">Seu palpite registrado:</span>
+                        <div className="guess-score-pill">
+                          {activeMatchDetails.userGuess.scoreA} x {activeMatchDetails.userGuess.scoreB}
+                        </div>
+                        {activeMatchDetails.status === 'finished' && (
+                          <div className="guess-points-earned">
+                            Pontos ganhos: <strong style={{ color: 'var(--color-primary)' }}>+{activeMatchDetails.userGuess.points} pts</strong>
+                          </div>
+                        )}
+                        {activeMatchDetails.status === 'pending' && (
+                          <button
+                            onClick={() => {
+                              setGuessModal({ isOpen: true, match: activeMatchDetails });
+                              setGuessForm({
+                                scoreA: activeMatchDetails.userGuess.scoreA.toString(),
+                                scoreB: activeMatchDetails.userGuess.scoreB.toString()
+                              });
+                              setActiveMatchDetails(null);
+                            }}
+                            className="btn btn-secondary"
+                            style={{ marginTop: '10px', width: '100%' }}
+                          >
+                            Alterar Palpite
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="no-guess-alert">
+                        {(new Date(activeMatchDetails.date) > new Date() && activeMatchDetails.status !== 'live') ? (
+                          <div>
+                            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Você ainda não deu seu palpite para este jogo!</p>
+                            <button
+                              onClick={() => {
+                                setGuessModal({ isOpen: true, match: activeMatchDetails });
+                                setGuessForm({ scoreA: '', scoreB: '' });
+                                setActiveMatchDetails(null);
+                              }}
+                              className="btn btn-primary"
+                              style={{ marginTop: '10px', width: '100%' }}
+                            >
+                              Dar Palpite
+                            </button>
+                          </div>
+                        ) : (
+                          <p style={{ color: 'var(--color-danger)', fontSize: '13px', fontWeight: '700' }}>Você não palpitou a tempo para este jogo.</p>
+                        )}
+                      </div>
+                    )}
+                    {user.role === 'admin' && viewMode === 'admin' && (
+                      <button 
+                        onClick={() => {
+                          setAdminGuessModal({ isOpen: true, match: activeMatchDetails });
+                          setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
+                          setActiveMatchDetails(null);
+                        }}
+                        className="btn btn-secondary"
+                        style={{ width: '100%', marginTop: '10px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
+                      >
+                        Palpitar por Outro
+                      </button>
+                    )}
                   </div>
-                ) : (
-                  <p className="no-data-text">Ninguém palpitou neste jogo.</p>
-                )
-              ) : (
-                <div className="bets-locked-message">
-                  🔒 Os palpites dos outros participantes ficarão visíveis assim que o jogo começar!
+
+                  <div className="other-bets-section">
+                    <h4 className="section-title">Palpites da Galera 👥</h4>
+                    {(new Date(activeMatchDetails.date) < new Date() || activeMatchDetails.status === 'live') ? (
+                      activeMatchDetails.otherGuesses && activeMatchDetails.otherGuesses.length > 0 ? (
+                        <div className="other-guesses-grid">
+                          {activeMatchDetails.otherGuesses.map((g, idx) => (
+                            <div key={idx} className="other-guess-card">
+                              <span className="other-guess-user">{g.userName}</span>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px' }}>
+                                <span className="other-guess-score">{g.scoreA} x {g.scoreB}</span>
+                                {activeMatchDetails.status === 'finished' && (
+                                  <span className="other-guess-points">+{g.points} pts</span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="no-data-text">Ninguém palpitou neste jogo.</p>
+                      )
+                    ) : (
+                      <div className="bets-locked-message">
+                        🔒 Os palpites dos outros participantes ficarão visíveis assim que o jogo começar!
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Tab Content: Stats */}
+              {matchDetailsTab === 'stats' && (
+                <div className="mc-tab-content fade-in">
+                  <h4 className="section-title">Estatísticas da Partida</h4>
+                  <div className="stats-container">
+                    {[
+                      { label: 'Posse de Bola (%)', value: matchStats.possession },
+                      { label: 'Finalizações', value: matchStats.shots },
+                      { label: 'Finalizações no Gol', value: matchStats.shotsOnTarget },
+                      { label: 'Escanteios', value: matchStats.corners },
+                      { label: 'Faltas', value: matchStats.fouls },
+                      { label: 'Cartões Amarelos', value: matchStats.yellowCards },
+                      { label: 'Cartões Vermelhos', value: matchStats.redCards },
+                      { label: 'Impedimentos', value: matchStats.offsides },
+                    ].map((stat, i) => {
+                      const total = stat.value[0] + stat.value[1];
+                      const pctA = total === 0 ? 50 : (stat.value[0] / total) * 100;
+                      const pctB = total === 0 ? 50 : (stat.value[1] / total) * 100;
+
+                      return (
+                        <div key={i} className="stat-row">
+                          <div className="stat-label-row">
+                            <span className="stat-num">{stat.value[0]}</span>
+                            <span className="stat-name">{stat.label}</span>
+                            <span className="stat-num">{stat.value[1]}</span>
+                          </div>
+                          <div className="stat-bar-container">
+                            <div className="stat-bar-left" style={{ width: `${pctA}%` }}></div>
+                            <div className="stat-bar-right" style={{ width: `${pctB}%` }}></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Tab Content: Odds / Betting */}
+              {matchDetailsTab === 'odds' && (
+                <div className="mc-tab-content fade-in">
+                  <h4 className="section-title">Mercado de Odds</h4>
+                  <p className="odds-disclaimer">Informações de apostas esportivas (Mock Data)</p>
+
+                  <div className="odds-market-card">
+                    <div className="odds-market-title">Vencedor do Encontro (Moneyline)</div>
+                    <div className="odds-buttons-row">
+                      <div className="odd-btn">
+                        <span className="odd-label">{activeMatchDetails.teamA}</span>
+                        <span className="odd-value">{matchOdds.moneyline[0]}</span>
+                      </div>
+                      <div className="odd-btn">
+                        <span className="odd-label">Empate</span>
+                        <span className="odd-value">{matchOdds.moneyline[1]}</span>
+                      </div>
+                      <div className="odd-btn">
+                        <span className="odd-label">{activeMatchDetails.teamB}</span>
+                        <span className="odd-value">{matchOdds.moneyline[2]}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="odds-market-card">
+                    <div className="odds-market-title">Total de Gols (Mais/Menos 2.5)</div>
+                    <div className="odds-buttons-row">
+                      <div className="odd-btn">
+                        <span className="odd-label">Mais de 2.5</span>
+                        <span className="odd-value">{matchOdds.overUnder2_5[0]}</span>
+                      </div>
+                      <div className="odd-btn">
+                        <span className="odd-label">Menos de 2.5</span>
+                        <span className="odd-value">{matchOdds.overUnder2_5[1]}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="odds-market-card">
+                    <div className="odds-market-title">Ambas Equipes Marcam (BTTS)</div>
+                    <div className="odds-buttons-row">
+                      <div className="odd-btn">
+                        <span className="odd-label">Sim</span>
+                        <span className="odd-value">{matchOdds.btts[0]}</span>
+                      </div>
+                      <div className="odd-btn">
+                        <span className="odd-label">Não</span>
+                        <span className="odd-value">{matchOdds.btts[1]}</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Toast Notification popup */}
       {toast && (
