@@ -1209,7 +1209,14 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {group.standings?.entries?.map((entry, eIdx) => {
+              {(() => {
+                const rawEntries = group.standings?.entries || [];
+                const sortedEntries = [...rawEntries].sort((a, b) => {
+                  const rA = getStatVal(a, 'rank') || 999;
+                  const rB = getStatVal(b, 'rank') || 999;
+                  return rA - rB;
+                });
+                return sortedEntries.map((entry, eIdx) => {
                 const rank = getStatVal(entry, 'rank') || (eIdx + 1);
                 const gp = getStatVal(entry, 'gamesPlayed');
                 const pts = getStatVal(entry, 'points');
@@ -1239,7 +1246,8 @@ function App() {
                     </td>
                   </tr>
                 );
-              })}
+              })
+            })()}
             </tbody>
           </table>
         </div>
@@ -1338,7 +1346,15 @@ function App() {
     return (
       <div className="standings-grid-container" style={{ display: 'grid', gridTemplateColumns: childrenArray.length > 1 ? 'repeat(auto-fit, minmax(320px, 1fr))' : '1fr', gap: '20px' }}>
         {childrenArray.map((group, idx) => {
-          const entries = group.standings?.entries || [];
+          const rawEntries = group.standings?.entries || [];
+          const entries = [...rawEntries].sort((a, b) => {
+            const getRank = (entry) => {
+              const stats = entry.stats || [];
+              const s = stats.find(x => x.type === 'rank' || x.name === 'rank');
+              return s ? parseInt(s.value, 10) : 999;
+            };
+            return getRank(a) - getRank(b);
+          });
           return (
             <div key={idx} className="standings-group-box glass-panel" style={{ padding: '16px' }}>
               <h4 className="standings-group-title" style={{ fontSize: '14px', fontWeight: '800', color: 'var(--color-primary)', margin: '0 0 12px 0', borderLeft: '3px solid var(--color-primary)', paddingLeft: '8px' }}>
