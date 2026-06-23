@@ -618,15 +618,6 @@ async function syncWithWorldCupAPI(league = 'fifa.world') {
         let homeScorers = extractScorers(comp, homeCompetitor.team.id);
         let awayScorers = extractScorers(comp, awayCompetitor.team.id);
 
-        // Fetch detailed scorers if the match is live/finished and we don't have them yet
-        if ((newStatus === 'live' || newStatus === 'finished') && homeScorers === 'null') {
-          const details = await fetchMatchDetailsFromESPN(league, e.id);
-          if (details) {
-            homeScorers = details.homeScorers;
-            awayScorers = details.awayScorers;
-          }
-        }
-
         if (!match) {
           // Create new match in DB if it doesn't exist
           match = {
@@ -671,17 +662,6 @@ async function syncWithWorldCupAPI(league = 'fifa.world') {
           
           let realHomeScorers = isHomeTeamA ? homeScorers : awayScorers;
           let realAwayScorers = isHomeTeamA ? awayScorers : homeScorers;
-
-          // Fetch detailed scorers if needed and not already present in the database match
-          if ((newStatus === 'live' || newStatus === 'finished') && 
-              (realHomeScorers === 'null' || !realHomeScorers) && 
-              (!match.home_scorers || match.home_scorers === 'null' || match.home_scorers === '{}')) {
-            const details = await fetchMatchDetailsFromESPN(league, e.id);
-            if (details) {
-              realHomeScorers = isHomeTeamA ? details.homeScorers : details.awayScorers;
-              realAwayScorers = isHomeTeamA ? details.awayScorers : details.homeScorers;
-            }
-          }
 
           // If the ESPN API returned "null" for scorers but we ALREADY have scorers in the database, keep them!
           if (realHomeScorers === 'null' && match.home_scorers && match.home_scorers !== 'null' && match.home_scorers !== '{}') {
@@ -845,6 +825,109 @@ app.get('/api/matches', async (req, res) => {
     res.status(500).json({ error: 'Erro ao buscar partidas.' });
   }
 });
+
+async function getEspnEventIdForMatch(match, league) {
+  try {
+    let urls = [];
+    if (league === 'fifa.world') {
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260611-20260719&limit=200&lang=pt');
+    } else if (league === 'bra.1') {
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/bra.1/scoreboard?dates=20260401-20260815&limit=250&lang=pt');
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/bra.1/scoreboard?dates=20260816-20261215&limit=250&lang=pt');
+    } else if (league === 'uefa.champions') {
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard?dates=20250901-20260615&limit=250&lang=pt');
+    } else if (league === 'eng.1') {
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=20250801-20260531&limit=250&lang=pt');
+    } else if (league === 'esp.1') {
+      urls.push('https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard?dates=20250801-20260531&limit=250&lang=pt');
+    } else {
+      urls.push(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard?dates=20260101-20261231&limit=300&lang=pt`);
+    }
+
+    const normA = normalizeTeam(match.teamA);
+    const normB = normalizeTeam(match.teamB);
+
+    for (const url of urls) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.events && Array.isArray(data.events)) {
+        for (const e of data.events) {
+          const comp = e.competitions?.[0];
+          const home = comp?.competitors?.find(c => c.homeAway === 'home')?.team?.displayName;
+          const away = comp?.competitors?.find(c => c.homeAway === 'away')?.team?.displayName;
+          if (!home || !away) continue;
+
+          const normHome = normalizeTeam(home);
+          const normAway = normalizeTeam(away);
+
+          if ((normHome === normA && normAway === normB) || (normHome === normB && normAway === normA)) {
+            return e.id;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to map match to ESPN event ID:', err);
+  }
+  return null;
+}
+
+// 2.5. Obter estatísticas e detalhes da partida (ESPN)
+app.get('/api/matches/:id/stats', async (req, res) => {
+  const { id } = req.params;
+  const { league = 'fifa.world' } = req.query;
+
+  try {
+    let espnEventId = null;
+
+    if (id.startsWith('espn_')) {
+      espnEventId = id.substring(5);
+    } else {
+      const db = await getData();
+      const match = db.matches.find(m => m.id === id);
+      if (!match) {
+        return res.status(404).json({ error: 'Partida não encontrada.' });
+      }
+      espnEventId = await getEspnEventIdForMatch(match, league);
+    }
+
+    if (!espnEventId) {
+      return res.status(404).json({ error: 'Estatísticas não disponíveis para esta partida.' });
+    }
+
+    const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/summary?event=${espnEventId}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) {
+      return res.status(500).json({ error: 'Erro ao obter dados do ESPN.' });
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error(`Failed to fetch stats for match ${id}:`, error);
+    res.status(500).json({ error: 'Erro ao buscar estatísticas da partida.' });
+  }
+});
+
+
+// 2.6. Obter classificação geral da liga (ESPN)
+app.get('/api/standings', async (req, res) => {
+  const { league = 'fifa.world' } = req.query;
+
+  try {
+    const url = `https://site.api.espn.com/apis/v2/sports/soccer/${league}/standings`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) {
+      return res.status(500).json({ error: 'Erro ao obter dados de classificação do ESPN.' });
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error(`Failed to fetch standings for league ${league}:`, error);
+    res.status(500).json({ error: 'Erro ao buscar classificação da liga.' });
+  }
+});
+
 
 // 3. Cadastrar nova partida (Admin)
 app.post('/api/matches', async (req, res) => {

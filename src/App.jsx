@@ -18,7 +18,9 @@ import {
   Clock,
   Sparkles,
   Eye,
-  EyeOff
+  EyeOff,
+  X,
+  Award
 } from 'lucide-react';
 
 // Team emoji auto-mapper (legacy fallback)
@@ -133,7 +135,7 @@ const TeamFlagImage = ({ name, className, logoUrl }) => {
   }, [name, logoUrl]);
 
   if (hasError || !imgSrc) {
-    return <span className="team-flag-emoji-fallback">{getTeamEmoji(name)}</span>;
+    return <span className={`team-flag-emoji-fallback ${className || ''}`}>{getTeamEmoji(name)}</span>;
   }
 
   return (
@@ -415,7 +417,13 @@ function App() {
   // Toggle visible guesses for finished matches
   const [expandedGuesses, setExpandedGuesses] = useState({});
   const [activeMatchDetails, setActiveMatchDetails] = useState(null);
+  const [detailsTab, setDetailsTab] = useState('palpites');
+  const [matchStats, setMatchStats] = useState(null);
+  const [loadingStats, setLoadingStats] = useState(false);
   const [selectedLeague, setSelectedLeague] = useState('fifa.world');
+  const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
+  const [leagueStandings, setLeagueStandings] = useState(null);
+  const [loadingStandings, setLoadingStandings] = useState(false);
 
   const selectedLeagueRef = React.useRef(selectedLeague);
   useEffect(() => {
@@ -442,9 +450,67 @@ function App() {
     return () => document.removeEventListener('click', handleOutsideClick);
   }, []);
 
+  // Fetch detailed statistics when activeMatchDetails is opened
+  useEffect(() => {
+    if (!activeMatchDetails) {
+      setMatchStats(null);
+      return;
+    }
+    // Reset tab to default
+    setDetailsTab('palpites');
+    
+    setLoadingStats(true);
+    setMatchStats(null); // Clear previous match's stats
+
+    const league = activeMatchDetails.league || 'fifa.world';
+    fetch(`/api/matches/${activeMatchDetails.id}/stats?league=${league}`)
+      .then(res => {
+        if (!res.ok) throw new Error('Erro ao carregar estatísticas');
+        return res.json();
+      })
+      .then(data => {
+        setMatchStats(data);
+      })
+      .catch(err => {
+        console.error('Error fetching match stats:', err);
+        showToast('Erro ao buscar estatísticas da partida.', 'error');
+        setMatchStats(null);
+      })
+      .finally(() => {
+        setLoadingStats(false);
+      });
+  }, [activeMatchDetails]);
+
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
   };
+
+  const fetchLeagueStandings = (targetLeague) => {
+    const league = targetLeague || selectedLeague;
+    setLoadingStandings(true);
+    setLeagueStandings(null);
+    fetch(`/api/standings?league=${league}`)
+      .then(res => {
+        if (!res.ok) throw new Error('Erro ao obter classificação');
+        return res.json();
+      })
+      .then(data => {
+        setLeagueStandings(data);
+      })
+      .catch(err => {
+        console.error('Error fetching league standings:', err);
+        showToast('Erro ao carregar classificação da liga.', 'error');
+      })
+      .finally(() => {
+        setLoadingStandings(false);
+      });
+  };
+
+  useEffect(() => {
+    if (user && activeTab === 'standings') {
+      fetchLeagueStandings(selectedLeague);
+    }
+  }, [user, selectedLeague, activeTab]);
 
   // Fetch data
   const fetchMatches = async (silent = false, league = selectedLeague) => {
@@ -954,6 +1020,677 @@ function App() {
     }
   };
 
+  const getScorersFromStats = (matchStats, isHome) => {
+    if (!matchStats) return [];
+    const comp = matchStats.header?.competitions?.[0];
+    if (!comp || !comp.details) return [];
+
+    const homeAway = isHome ? 'home' : 'away';
+    const teamId = comp.competitors?.find(c => c.homeAway === homeAway)?.team?.id;
+    if (!teamId) return [];
+
+    return comp.details
+      .filter(d => d.scoringPlay === true && d.team && String(d.team.id) === String(teamId))
+      .map(d => {
+        const athlete = d.participants?.[0]?.athlete;
+        const name = athlete ? athlete.displayName : "Unknown";
+        const time = d.clock ? d.clock.displayValue : "";
+
+        let suffix = "";
+        if (d.ownGoal) {
+          suffix = " (GC)";
+        } else if (d.penaltyKick) {
+          suffix = " (P)";
+        }
+
+        return `${name} ${time}${suffix}`;
+      });
+  };
+
+  const parseStatValue = (valStr) => {
+    if (!valStr) return 0;
+    const clean = valStr.toString().replace('%', '').trim();
+    const val = parseFloat(clean);
+    return isNaN(val) ? 0 : val;
+  };
+
+  const getStatsComparisonList = () => {
+    if (!matchStats?.boxscore?.teams) return [];
+    const teamAStats = matchStats.boxscore.teams[0]?.statistics || [];
+    const teamBStats = matchStats.boxscore.teams[1]?.statistics || [];
+    
+    return teamAStats.map(statA => {
+      const statB = teamBStats.find(s => s.name === statA.name);
+      return {
+        name: statA.name,
+        label: statA.label || statA.name,
+        valA: statA.displayValue,
+        valB: statB ? statB.displayValue : '0'
+      };
+    });
+  };
+
+  const getStatVal = (entry, statName) => {
+    const s = entry.stats?.find(x => x.name === statName);
+    return s ? s.value : 0;
+  };
+
+  const renderRosterList = (rosterObj, title) => {
+    if (!rosterObj || !rosterObj.roster || rosterObj.roster.length === 0) {
+      return (
+        <div className="roster-team-column">
+          <h5 className="roster-column-title">{title}</h5>
+          <p className="no-data-text">Escalação indisponível.</p>
+        </div>
+      );
+    }
+
+    const starters = rosterObj.roster.filter(p => p.starter);
+    const bench = rosterObj.roster.filter(p => !p.starter);
+    
+    return (
+      <div className="roster-team-column glass-panel">
+        <div className="roster-team-header">
+          <h5 style={{ margin: 0, fontSize: '15px', color: 'var(--text-primary)' }}>{title}</h5>
+          {rosterObj.formation && <span className="formation-badge">{rosterObj.formation}</span>}
+        </div>
+        
+        <div className="roster-section-group">
+          <h6 className="roster-group-title">Titulares</h6>
+          <div className="players-list">
+            {starters.map((p, idx) => (
+              <div key={idx} className="player-row-item">
+                <span className="player-jersey">{p.jersey || '-'}</span>
+                <div className="player-info-meta">
+                  <span className="player-name">{p.athlete?.displayName || 'Desconhecido'}</span>
+                  <span className="player-pos">{p.position?.displayName || p.position?.abbreviation}</span>
+                </div>
+                <div className="player-events-indicators">
+                  {p.subbedIn && <span className="sub-indicator in" title="Entrou">🔄</span>}
+                  {p.subbedOut && <span className="sub-indicator out" title="Saiu">🔄</span>}
+                  {p.stats?.find(s => s.name === 'yellowCards')?.value > 0 && <span className="card-indicator yellow">🟨</span>}
+                  {p.stats?.find(s => s.name === 'redCards')?.value > 0 && <span className="card-indicator red">🟥</span>}
+                  {p.stats?.find(s => s.name === 'totalGoals')?.value > 0 && 
+                    Array.from({ length: p.stats.find(s => s.name === 'totalGoals').value }).map((_, i) => (
+                      <span key={i} className="goal-indicator" title="Gol">⚽</span>
+                    ))
+                  }
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="roster-section-group" style={{ marginTop: '20px' }}>
+          <h6 className="roster-group-title">Reservas</h6>
+          <div className="players-list bench-list">
+            {bench.map((p, idx) => (
+              <div key={idx} className="player-row-item">
+                <span className="player-jersey">{p.jersey || '-'}</span>
+                <div className="player-info-meta">
+                  <span className="player-name">{p.athlete?.displayName || 'Desconhecido'}</span>
+                  <span className="player-pos">{p.position?.displayName || p.position?.abbreviation}</span>
+                </div>
+                <div className="player-events-indicators">
+                  {p.subbedIn && <span className="sub-indicator in" title="Entrou">🔄</span>}
+                  {p.stats?.find(s => s.name === 'yellowCards')?.value > 0 && <span className="card-indicator yellow">🟨</span>}
+                  {p.stats?.find(s => s.name === 'redCards')?.value > 0 && <span className="card-indicator red">🟥</span>}
+                  {p.stats?.find(s => s.name === 'totalGoals')?.value > 0 && 
+                    Array.from({ length: p.stats.find(s => s.name === 'totalGoals').value }).map((_, i) => (
+                      <span key={i} className="goal-indicator" title="Gol">⚽</span>
+                    ))
+                  }
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderFormList = (formObj) => {
+    if (!formObj || !formObj.events || formObj.events.length === 0) {
+      return <p className="no-data-text">Forma recente indisponível.</p>;
+    }
+    return (
+      <div className="form-events-list">
+        <div className="form-badge-row">
+          {formObj.events.map((e, idx) => (
+            <span key={idx} className={`result-dot ${e.gameResult}`} title={`${e.gameResult === 'W' ? 'Vitória' : e.gameResult === 'L' ? 'Derrota' : 'Empate'} contra ${e.opponent?.displayName}`}>
+              {e.gameResult}
+            </span>
+          ))}
+        </div>
+        <div className="form-games-grid" style={{ marginTop: '12px' }}>
+          {formObj.events.map((e, idx) => (
+            <div key={idx} className="form-game-card glass-panel">
+              <div className="form-game-header">
+                <span className="form-game-competition">{e.competitionName || 'Amistoso'}</span>
+                <span className="form-game-date">{new Date(e.gameDate).toLocaleDateString('pt-BR')}</span>
+              </div>
+              <div className="form-game-body">
+                <span className={`result-badge ${e.gameResult}`}>{e.gameResult === 'W' ? 'V' : e.gameResult === 'L' ? 'D' : 'E'}</span>
+                <div className="form-game-teams-score">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <img src={e.opponentLogo || e.opponent?.logo} alt="" className="form-opponent-logo" onError={(ev) => { ev.target.style.display = 'none'; }} />
+                    <span className="form-game-opp">{e.opponent?.displayName}</span>
+                  </div>
+                  <span className="form-game-score">{e.score}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderStandingsTable = (standingsObj) => {
+    if (!standingsObj || !standingsObj.groups || standingsObj.groups.length === 0) {
+      return <p className="no-data-text">Classificação indisponível.</p>;
+    }
+    
+    return standingsObj.groups.map((group, gIdx) => (
+      <div key={gIdx} className="standings-group-box glass-panel" style={{ marginTop: '20px' }}>
+        <h5 className="standings-group-title">{group.header || 'Classificação'}</h5>
+        <div className="standings-table-wrapper">
+          <table className="standings-table">
+            <thead>
+              <tr>
+                <th style={{ width: '40px' }}>Pos</th>
+                <th>Time</th>
+                <th title="Pontos">P</th>
+                <th title="Jogos">J</th>
+                <th title="Vitórias">V</th>
+                <th title="Empates">E</th>
+                <th title="Derrotas">D</th>
+                <th title="Saldo de Gols">SG</th>
+              </tr>
+            </thead>
+            <tbody>
+              {group.standings?.entries?.map((entry, eIdx) => {
+                const rank = getStatVal(entry, 'rank') || (eIdx + 1);
+                const gp = getStatVal(entry, 'gamesPlayed');
+                const pts = getStatVal(entry, 'points');
+                const wins = getStatVal(entry, 'wins');
+                const ties = getStatVal(entry, 'ties');
+                const losses = getStatVal(entry, 'losses');
+                const gd = getStatVal(entry, 'pointDifferential');
+                
+                const isCurrentTeam = entry.team?.displayName === activeMatchDetails.teamA || entry.team?.displayName === activeMatchDetails.teamB;
+
+                return (
+                  <tr key={eIdx} className={isCurrentTeam ? 'highlighted-row' : ''}>
+                    <td className="rank-col">{rank}</td>
+                    <td className="team-col">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {entry.logo?.[0]?.href && <img src={entry.logo[0].href} alt="" className="standings-team-logo" />}
+                        <span>{entry.team?.displayName || entry.team}</span>
+                      </div>
+                    </td>
+                    <td className="points-col"><strong>{pts}</strong></td>
+                    <td>{gp}</td>
+                    <td>{wins}</td>
+                    <td>{ties}</td>
+                    <td>{losses}</td>
+                    <td style={{ color: gd > 0 ? '#10b981' : gd < 0 ? '#ef4444' : 'var(--text-secondary)' }}>
+                      {gd > 0 ? `+${gd}` : gd}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    ));
+  };
+
+  const renderTimeline = (events) => {
+    if (!events || events.length === 0) {
+      return <p className="no-data-text">Linha do tempo indisponível para esta partida.</p>;
+    }
+    
+    return (
+      <div className="match-timeline-feed">
+        {events.map((e, idx) => {
+          const isGoal = e.type?.type?.includes('goal') || e.type?.text?.includes('Goal');
+          const isYellow = e.type?.type?.includes('yellow-card') || e.type?.text?.includes('Yellow Card');
+          const isRed = e.type?.type?.includes('red-card') || e.type?.text?.includes('Red Card');
+          const isSub = e.type?.type?.includes('substitution') || e.type?.text?.includes('Substitution');
+          
+          let icon = '⏱️';
+          let iconClass = 'info';
+          if (isGoal) { icon = '⚽'; iconClass = 'goal'; }
+          else if (isYellow) { icon = '🟨'; iconClass = 'card-yellow'; }
+          else if (isRed) { icon = '🟥'; iconClass = 'card-red'; }
+          else if (isSub) { icon = '🔄'; iconClass = 'sub'; }
+
+          const isTeamA = e.team?.displayName === activeMatchDetails.teamA;
+          const isTeamB = e.team?.displayName === activeMatchDetails.teamB;
+          let alignClass = 'center';
+          if (isTeamA) alignClass = 'left';
+          else if (isTeamB) alignClass = 'right';
+
+          return (
+            <div key={idx} className={`timeline-event-item align-${alignClass}`}>
+              <span className="event-time">{e.clock?.displayValue || '⏱️'}</span>
+              <span className={`event-icon-badge ${iconClass}`}>{icon}</span>
+              <div className="event-detail-card glass-panel">
+                <p className="event-text">{e.text || e.type?.text}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderLeaderCategories = (teamLeadersObj, teamName) => {
+    const categories = teamLeadersObj?.leaders || [];
+    if (categories.length === 0) return <p className="no-data-text">Destaques indisponíveis.</p>;
+    
+    return (
+      <div className="leaders-team-block">
+        <h6 className="leaders-team-title">Destaques - {teamName}</h6>
+        <div className="leaders-categories-list">
+          {categories.map((cat, idx) => {
+            const topAthlete = cat.leaders?.[0];
+            if (!topAthlete) return null;
+            return (
+              <div key={idx} className="leader-card glass-panel">
+                <span className="leader-category-title">{cat.displayName}</span>
+                <div className="leader-athlete-info">
+                  {topAthlete.athlete?.jerseyImage?.[0]?.href ? (
+                    <img src={topAthlete.athlete.jerseyImage[0].href} alt="" className="leader-jersey-img" />
+                  ) : (
+                    <span className="leader-default-icon">🏃‍♂️</span>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span className="leader-player-name">{topAthlete.athlete?.displayName || topAthlete.athlete?.shortName}</span>
+                    <span className="leader-player-stat">{cat.leaders[0].displayValue} {cat.leaders[0].mainStat?.label || ''} ({topAthlete.summary})</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const getStageTitle = (group) => {
+    switch (group) {
+      case 'R32': return 'Fase de 32';
+      case 'R16': return 'Oitavas';
+      case 'QF': return 'Quartas';
+      case 'SF': return 'Semifinais';
+      case '3RD': return 'Disputa de 3º';
+      case 'FINAL': return 'Final';
+      default: return group;
+    }
+  };
+
+  const renderStandingsTableDetailed = (childrenArray) => {
+    if (!childrenArray || childrenArray.length === 0) return null;
+
+    return (
+      <div className="standings-grid-container" style={{ display: 'grid', gridTemplateColumns: childrenArray.length > 1 ? 'repeat(auto-fit, minmax(320px, 1fr))' : '1fr', gap: '20px' }}>
+        {childrenArray.map((group, idx) => {
+          const entries = group.standings?.entries || [];
+          return (
+            <div key={idx} className="standings-group-box glass-panel" style={{ padding: '16px' }}>
+              <h4 className="standings-group-title" style={{ fontSize: '14px', fontWeight: '800', color: 'var(--color-primary)', margin: '0 0 12px 0', borderLeft: '3px solid var(--color-primary)', paddingLeft: '8px' }}>
+                {group.name || group.header || 'Classificação'}
+              </h4>
+              <div className="standings-table-wrapper" style={{ overflowX: 'auto' }}>
+                <table className="standings-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', textAlign: 'center' }}>
+                  <thead>
+                    <tr style={{ background: 'rgba(255, 255, 255, 0.03)' }}>
+                      <th style={{ padding: '6px 4px', width: '30px' }}>Pos</th>
+                      <th style={{ padding: '6px 4px', width: '24px' }}>Var</th>
+                      <th style={{ padding: '6px 6px', textAlign: 'left' }}>Time</th>
+                      <th style={{ padding: '6px 4px', fontWeight: '800', color: 'var(--color-primary)' }}>P</th>
+                      <th style={{ padding: '6px 4px' }}>J</th>
+                      <th style={{ padding: '6px 4px' }}>V</th>
+                      <th style={{ padding: '6px 4px' }}>E</th>
+                      <th style={{ padding: '6px 4px' }}>D</th>
+                      <th style={{ padding: '6px 4px' }}>GP</th>
+                      <th style={{ padding: '6px 4px' }}>GC</th>
+                      <th style={{ padding: '6px 4px' }}>SG</th>
+                      <th style={{ padding: '6px 4px' }}>PPG</th>
+                      <th style={{ padding: '6px 4px' }}>PD</th>
+                      <th style={{ padding: '6px 6px', width: '60px' }}>Geral</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {entries.map((entry, eIdx) => {
+                      const teamInfo = entry.team || {};
+                      const stats = entry.stats || [];
+                      
+                      const getVal = (type) => {
+                        const s = stats.find(x => x.type === type || x.name === type);
+                        return s ? s.displayValue : '0';
+                      };
+
+                      const getRawVal = (type) => {
+                        const s = stats.find(x => x.type === type || x.name === type);
+                        return s ? s.value : 0;
+                      };
+
+                      const gp = getVal('gamesplayed') || getVal('gamesPlayed');
+                      const wins = getVal('wins');
+                      const ties = getVal('ties');
+                      const losses = getVal('losses');
+                      const pts = getVal('points');
+                      const ptsFor = getVal('pointsfor') || getVal('pointsFor');
+                      const ptsAgainst = getVal('pointsagainst') || getVal('pointsAgainst');
+                      const diff = getVal('pointdifferential') || getVal('pointDifferential');
+                      const ppg = getVal('ppg');
+                      const ded = getVal('deductions');
+                      const overall = getVal('total') || stats.find(x => x.id === '0')?.displayValue || '-';
+                      const rank = getVal('rank');
+                      const rankChange = getRawVal('rankchange') || getRawVal('rankChange') || 0;
+
+                      const logoUrl = teamInfo.logos?.[0]?.href;
+
+                      return (
+                        <tr key={eIdx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          <td style={{ padding: '8px 4px', fontWeight: '800' }}>{rank}</td>
+                          <td style={{ padding: '8px 4px' }}>
+                            {rankChange > 0 ? (
+                              <span style={{ color: '#ef4444', fontSize: '9px' }}>▼{Math.abs(rankChange)}</span>
+                            ) : rankChange < 0 ? (
+                              <span style={{ color: '#10b981', fontSize: '9px' }}>▲{Math.abs(rankChange)}</span>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>-</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '8px 6px', textAlign: 'left', fontWeight: '600' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {logoUrl && <img src={logoUrl} alt="" style={{ width: '16px', height: '16px', objectFit: 'contain' }} />}
+                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '120px' }} title={teamInfo.displayName}>
+                                {teamInfo.displayName}
+                              </span>
+                            </div>
+                          </td>
+                          <td style={{ padding: '8px 4px', fontWeight: '800', color: 'var(--color-primary)', background: 'rgba(16, 185, 129, 0.05)' }}>{pts}</td>
+                          <td style={{ padding: '8px 4px' }}>{gp}</td>
+                          <td style={{ padding: '8px 4px' }}>{wins}</td>
+                          <td style={{ padding: '8px 4px' }}>{ties}</td>
+                          <td style={{ padding: '8px 4px' }}>{losses}</td>
+                          <td style={{ padding: '8px 4px' }}>{ptsFor}</td>
+                          <td style={{ padding: '8px 4px' }}>{ptsAgainst}</td>
+                          <td style={{ padding: '8px 4px', fontWeight: '600', color: parseFloat(diff) > 0 ? '#10b981' : parseFloat(diff) < 0 ? '#ef4444' : 'var(--text-secondary)' }}>
+                            {diff}
+                          </td>
+                          <td style={{ padding: '8px 4px' }}>{ppg}</td>
+                          <td style={{ padding: '8px 4px', color: parseFloat(ded) > 0 ? '#ef4444' : 'var(--text-secondary)' }}>{ded > 0 ? `-${ded}` : '-'}</td>
+                          <td style={{ padding: '8px 6px', fontSize: '10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{overall}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const getParentMatchNumbers = (matchNumber) => {
+    const routing = {
+      // R16 feeds from R32
+      89: [74, 77],
+      90: [73, 75],
+      91: [76, 78],
+      92: [79, 80],
+      93: [83, 84],
+      94: [81, 82],
+      95: [86, 88],
+      96: [85, 87],
+
+      // QF feeds from R16
+      97: [89, 90],
+      98: [93, 94],
+      99: [91, 92],
+      100: [95, 96],
+
+      // SF feeds from QF
+      101: [97, 98],
+      102: [99, 100],
+
+      // FINAL feeds from SF
+      104: [101, 102],
+      103: [101, 102]
+    };
+    return routing[matchNumber] || null;
+  };
+
+  const getMatchIdNumber = (id) => {
+    if (!id) return null;
+    const m = id.match(/\d+/);
+    return m ? parseInt(m[0], 10) : null;
+  };
+
+  const extractMatchNumber = (teamName) => {
+    if (!teamName) return null;
+    const m = teamName.match(/\d+/);
+    return m ? parseInt(m[0], 10) : null;
+  };
+
+  const getParentMatches = (match, matchesList, hasR32) => {
+    // Only allow parent lookups for stages that actually have parents in the knockout tree
+    const allowedStages = ['FINAL', 'SF', 'QF'];
+    if (hasR32) {
+      allowedStages.push('R16');
+    }
+    
+    if (!allowedStages.includes(match.group)) {
+      return [null, null];
+    }
+
+    const idNum = getMatchIdNumber(match.id);
+    let parentNums = null;
+    
+    if (idNum) {
+      parentNums = getParentMatchNumbers(idNum);
+    }
+    
+    if (parentNums) {
+      const parentA = matchesList.find(m => getMatchIdNumber(m.id) === parentNums[0]);
+      const parentB = matchesList.find(m => getMatchIdNumber(m.id) === parentNums[1]);
+      return [parentA, parentB];
+    }
+    
+    // Fallback to name parsing
+    const numA = extractMatchNumber(match.teamA);
+    const numB = extractMatchNumber(match.teamB);
+    
+    const parentA = numA ? matchesList.find(m => getMatchIdNumber(m.id) === numA) : null;
+    const parentB = numB ? matchesList.find(m => getMatchIdNumber(m.id) === numB) : null;
+    
+    return [parentA, parentB];
+  };
+
+  const buildTreeNode = (match, matchesList, hasR32) => {
+    if (!match) return null;
+    const [parentA, parentB] = getParentMatches(match, matchesList, hasR32);
+    return {
+      match,
+      left: parentA ? buildTreeNode(parentA, matchesList, hasR32) : null,
+      right: parentB ? buildTreeNode(parentB, matchesList, hasR32) : null
+    };
+  };
+
+  const renderBracket = () => {
+    const stages = ['R32', 'R16', 'QF', 'SF', 'FINAL'];
+    const thirdPlaceMatch = matches.find(m => m.group === '3RD');
+
+    const hasKnockout = matches.some(m => stages.includes(m.group) || m.group === '3RD');
+    if (!hasKnockout) return null;
+
+    // Detect columns based on available stages
+    const hasR32 = matches.some(m => m.group === 'R32');
+    const hasR16 = matches.some(m => m.group === 'R16');
+    const hasQF = matches.some(m => m.group === 'QF');
+    const hasSF = matches.some(m => m.group === 'SF');
+
+    const finalMatch = matches.find(m => m.group === 'FINAL');
+    const treeRoot = finalMatch ? buildTreeNode(finalMatch, matches, hasR32) : null;
+
+    const headerColumns = [];
+    if (hasR32) headerColumns.push('Dezesseis-avos (R32)');
+    if (hasR16) headerColumns.push('Oitavas de Final');
+    if (hasQF) headerColumns.push('Quartas de Final');
+    if (hasSF) headerColumns.push('Semifinais');
+    headerColumns.push('Final & 3º Lugar');
+
+    const renderTreeNode = (node) => {
+      if (!node) return null;
+      const { match, left, right } = node;
+      const isLive = match.status === 'live';
+      const isFinished = match.status === 'finished';
+      
+      const hasChildren = left || right;
+
+      return (
+        <div className="bracket-branch">
+          {hasChildren && (
+            <div className="bracket-children">
+              {left && renderTreeNode(left)}
+              {right && renderTreeNode(right)}
+            </div>
+          )}
+          
+          <div className="bracket-match-node">
+            <div 
+              onClick={() => setActiveMatchDetails(match)}
+              className={`bracket-match-card glass-panel ${isLive ? 'live-border' : ''}`}
+              style={{ padding: '10px', cursor: 'pointer', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                <span>{formatDate(match.date).split(' ')[0]}</span>
+                <span className={`indicator-badge ${match.status}`} style={{ fontSize: '8px' }}>
+                  {isFinished ? 'Fim' : isLive ? (match.matchClock || 'Ao Vivo') : 'Aberto'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '0' }}>
+                    {renderTeamFlag(match.teamA, "bracket-flag", match.teamALogo)}
+                    <span 
+                      style={{ 
+                        fontSize: '12px', 
+                        fontWeight: match.scoreA > match.scoreB && isFinished ? '800' : '500', 
+                        color: match.scoreA > match.scoreB && isFinished ? 'var(--text-primary)' : 'var(--text-secondary)', 
+                        whiteSpace: 'nowrap', 
+                        overflow: 'hidden', 
+                        textOverflow: 'ellipsis', 
+                        maxWidth: '140px' 
+                      }} 
+                      title={match.teamA}
+                    >
+                      {match.teamA}
+                    </span>
+                  </div>
+                  {(isFinished || isLive) && <span style={{ fontSize: '12px', fontWeight: '800' }}>{match.scoreA}</span>}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '0' }}>
+                    {renderTeamFlag(match.teamB, "bracket-flag", match.teamBLogo)}
+                    <span 
+                      style={{ 
+                        fontSize: '12px', 
+                        fontWeight: match.scoreB > match.scoreA && isFinished ? '800' : '500', 
+                        color: match.scoreB > match.scoreA && isFinished ? 'var(--text-primary)' : 'var(--text-secondary)', 
+                        whiteSpace: 'nowrap', 
+                        overflow: 'hidden', 
+                        textOverflow: 'ellipsis', 
+                        maxWidth: '140px' 
+                      }} 
+                      title={match.teamB}
+                    >
+                      {match.teamB}
+                    </span>
+                  </div>
+                  {(isFinished || isLive) && <span style={{ fontSize: '12px', fontWeight: '800' }}>{match.scoreB}</span>}
+                </div>
+              </div>
+            </div>
+
+            {/* 3rd Place Match appended under Finals */}
+            {match.group === 'FINAL' && thirdPlaceMatch && (
+              <div style={{ marginTop: '16px', borderTop: '1px dashed var(--border-color)', paddingTop: '12px' }} onClick={(e) => e.stopPropagation()}>
+                <h5 style={{ fontSize: '9px', textTransform: 'uppercase', color: 'var(--color-secondary)', textAlign: 'center', marginBottom: '6px', margin: '0 0 6px 0' }}>
+                  Disputa de 3º Lugar
+                </h5>
+                <div 
+                  onClick={() => setActiveMatchDetails(thirdPlaceMatch)}
+                  className={`bracket-match-card glass-panel ${thirdPlaceMatch.status === 'live' ? 'live-border' : ''}`} 
+                  style={{ padding: '10px', cursor: 'pointer', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    <span>{formatDate(thirdPlaceMatch.date).split(' ')[0]}</span>
+                    <span className={`indicator-badge ${thirdPlaceMatch.status}`} style={{ fontSize: '8px' }}>
+                      {thirdPlaceMatch.status === 'finished' ? 'Fim' : thirdPlaceMatch.status === 'live' ? (thirdPlaceMatch.matchClock || 'Ao Vivo') : 'Aberto'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '0' }}>
+                        {renderTeamFlag(thirdPlaceMatch.teamA, "bracket-flag", thirdPlaceMatch.teamALogo)}
+                        <span style={{ fontSize: '12px', fontWeight: thirdPlaceMatch.scoreA > thirdPlaceMatch.scoreB && thirdPlaceMatch.status === 'finished' ? '800' : '500', color: thirdPlaceMatch.scoreA > thirdPlaceMatch.scoreB && thirdPlaceMatch.status === 'finished' ? 'var(--text-primary)' : 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px' }} title={thirdPlaceMatch.teamA}>
+                          {thirdPlaceMatch.teamA}
+                        </span>
+                      </div>
+                      {(thirdPlaceMatch.status === 'finished' || thirdPlaceMatch.status === 'live') && <span style={{ fontSize: '12px', fontWeight: '800' }}>{thirdPlaceMatch.scoreA}</span>}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '0' }}>
+                        {renderTeamFlag(thirdPlaceMatch.teamB, "bracket-flag", thirdPlaceMatch.teamBLogo)}
+                        <span style={{ fontSize: '12px', fontWeight: thirdPlaceMatch.scoreB > thirdPlaceMatch.scoreA && thirdPlaceMatch.status === 'finished' ? '800' : '500', color: thirdPlaceMatch.scoreB > thirdPlaceMatch.scoreA && thirdPlaceMatch.status === 'finished' ? 'var(--text-primary)' : 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px' }} title={thirdPlaceMatch.teamB}>
+                          {thirdPlaceMatch.teamB}
+                        </span>
+                      </div>
+                      {(thirdPlaceMatch.status === 'finished' || thirdPlaceMatch.status === 'live') && <span style={{ fontSize: '12px', fontWeight: '800' }}>{thirdPlaceMatch.scoreB}</span>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    return (
+      <div className="bracket-section glass-panel" style={{ marginTop: '20px', padding: '20px' }}>
+        <h3 className="section-title" style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span>Fase de Mata-Mata 🏆</span>
+        </h3>
+
+        <div className="bracket-scroll-container" style={{ overflowX: 'auto', paddingBottom: '16px', paddingTop: '10px' }}>
+          <div className="bracket-headers" style={{ display: 'flex', gap: '32px', marginBottom: '12px', paddingLeft: '8px', pointerEvents: 'none' }}>
+          {headerColumns.map((col, index) => (
+            <div key={index} style={{ width: '220px', flexShrink: 0, textAlign: 'center', fontWeight: '800', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--color-primary)' }}>
+              {col}
+            </div>
+          ))}
+        </div>
+          <div style={{ display: 'inline-flex', padding: '10px 4px' }}>
+            {treeRoot ? renderTreeNode(treeRoot) : (
+              <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Carregando chaves do mata-mata...</p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const toggleGuessesExpand = (matchId) => {
     setExpandedGuesses(prev => ({
       ...prev,
@@ -1055,6 +1792,15 @@ function App() {
                 </button>
               )}
 
+              <button 
+                onClick={() => setIsRulesModalOpen(true)}
+                className="btn btn-secondary btn-icon-only" 
+                title="Regras de Pontuação"
+                style={{ borderColor: 'var(--color-primary-glow)', color: 'var(--color-primary)' }}
+              >
+                <HelpCircle size={16} />
+              </button>
+
               <button onClick={handleLogout} className="btn btn-secondary btn-icon-only" title="Sair">
                 <LogOut size={16} />
               </button>
@@ -1084,11 +1830,14 @@ function App() {
             Classificação
           </button>
           <button 
-            className={`tab-btn ${activeTab === 'rules' ? 'active' : ''}`}
-            onClick={() => setActiveTab('rules')}
+            className={`tab-btn ${activeTab === 'standings' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('standings');
+              fetchLeagueStandings();
+            }}
           >
-            <HelpCircle size={18} />
-            Regras de Pontos
+            <Award size={18} />
+            Tabela & Mata-mata
           </button>
           
           {user.role === 'admin' && viewMode === 'admin' && (
@@ -1699,79 +2448,48 @@ function App() {
           </div>
         )}
 
-        {/* Tab 3: Rules & Calculations */}
-        {activeTab === 'rules' && (
-          <div className="rules-container">
-            <div className="rules-content glass-panel">
+        {/* Tab 3: League Standings & Bracket */}
+        {activeTab === 'standings' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div className="glass-panel animate-fade-in" style={{ padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
               <div>
-                <h3 className="rules-section-title">Como funciona a pontuação?</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '14px', lineHeight: '150%' }}>
-                  Seus palpites são comparados com os resultados oficiais e pontuados da forma mais justa possível. Você sempre receberá a pontuação correspondente ao seu <strong>melhor acerto</strong> no jogo.
+                <h2 style={{ fontSize: '20px', fontWeight: '800' }}>Tabela & Mata-mata 🏆</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '4px' }}>
+                  Acompanhe em tempo real a tabela e os resultados dos times da competição.
                 </p>
               </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div className="rule-card">
-                  <div className="rule-info">
-                    <span className="rule-name">Placar Exato 🎯</span>
-                    <span className="rule-desc">Acertar perfeitamente a quantidade de gols de ambos os times (ex: palpite 2x1, resultado 2x1).</span>
-                  </div>
-                  <span className="rule-points">25 pts</span>
-                </div>
-
-                <div className="rule-card">
-                  <div className="rule-info">
-                    <span className="rule-name">Vencedor e Saldo de Gols ⚖️</span>
-                    <span className="rule-desc">Acertar o vencedor e a diferença de gols do placar final (ex: palpite 3x1, resultado 2x0 - saldo de +2).</span>
-                  </div>
-                  <span className="rule-points">18 pts</span>
-                </div>
-
-                <div className="rule-card">
-                  <div className="rule-info">
-                    <span className="rule-name">Vencedor e Gols do Ganhador ⚽</span>
-                    <span className="rule-desc">Acertar quem venceu e a quantidade de gols que o vencedor fez (ex: palpite 2x1, resultado 2x0).</span>
-                  </div>
-                  <span className="rule-points">15 pts</span>
-                </div>
-
-                <div className="rule-card">
-                  <div className="rule-info">
-                    <span className="rule-name">Empate com placar diferente 🤝</span>
-                    <span className="rule-desc">Acertar que o jogo terminaria empatado, mas errar a quantidade exata de gols (ex: palpite 1x1, resultado 2x2).</span>
-                  </div>
-                  <span className="rule-points">15 pts</span>
-                </div>
-
-                <div className="rule-card">
-                  <div className="rule-info">
-                    <span className="rule-name">Vencedor e Gols do Perdedor 🥅</span>
-                    <span className="rule-desc">Acertar quem venceu e a quantidade de gols que o perdedor fez (ex: palpite 2x1, resultado 3x1).</span>
-                  </div>
-                  <span className="rule-points">12 pts</span>
-                </div>
-
-                <div className="rule-card">
-                  <div className="rule-info">
-                    <span className="rule-name">Apenas Vencedor 🏃‍♂️</span>
-                    <span className="rule-desc">Acertar apenas quem ganharia o jogo, sem acertar gols ou saldo (ex: palpite 2x1, resultado 3x0).</span>
-                  </div>
-                  <span className="rule-points">10 pts</span>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', fontSize: '13px', color: 'var(--text-secondary)' }}>
-                <Info size={16} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
-                <span><strong>Observação</strong>: Caso o seu palpite não se enquadre em nenhum dos casos acima (por exemplo, apostar em vitória do Time A e o jogo terminar empatado ou vitória do Time B), você receberá <strong>0 pontos</strong> por esse palpite.</span>
-              </div>
+              <button 
+                onClick={() => fetchLeagueStandings()}
+                className="btn btn-secondary" 
+                disabled={loadingStandings}
+                style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+              >
+                <RefreshCw size={14} className={loadingStandings ? "animate-spin" : ""} />
+                Atualizar Classificação
+              </button>
             </div>
 
-            <div className="rules-content glass-panel" style={{ height: 'fit-content' }}>
-              <h3 className="rules-section-title" style={{ color: 'var(--color-secondary)' }}>Dica de ouro! 🏆</h3>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '14px', lineHeight: '160%' }}>
-                Os palpites da galera só ficam visíveis para os outros participantes <strong>depois que o cronômetro do jogo começar</strong>. Isso evita que os amigos fiquem "copiando" palpites estratégicos no final do prazo!
-              </p>
-            </div>
+            {loadingStandings && (
+              <div className="stats-loading-box glass-panel fade-in" style={{ padding: '60px 24px' }}>
+                <div className="loading-spinner"></div>
+                <p style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>Buscando classificação oficial...</p>
+              </div>
+            )}
+
+            {!loadingStandings && leagueStandings && leagueStandings.children && (
+              <div className="fade-in">
+                {renderStandingsTableDetailed(leagueStandings.children)}
+              </div>
+            )}
+
+            {!loadingStandings && (!leagueStandings || !leagueStandings.children) && (
+              <div className="glass-panel" style={{ padding: '40px 20px', textAlign: 'center' }}>
+                <p className="no-data-text">Nenhuma tabela de classificação disponível no momento.</p>
+              </div>
+            )}
+
+            {/* Visual tournament bracket (knockout stage) */}
+            {!loadingStandings && renderBracket()}
           </div>
         )}
 
@@ -2216,182 +2934,580 @@ function App() {
         </div>
       )}
 
-      {/* MODAL: Match Details */}
+      {/* FULLSCREEN: Match Details */}
       {activeMatchDetails && (
-        <div className="modal-overlay" onClick={() => setActiveMatchDetails(null)}>
-          <div className="modal-content glass-panel match-details-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header-nav">
-              <span className="group-badge">Grupo {activeMatchDetails.group || 'Geral'} • Rodada {activeMatchDetails.matchday || '1'}</span>
-              <button className="close-modal-btn" onClick={() => setActiveMatchDetails(null)}>×</button>
+        <div className="match-details-fullscreen animate-fade-in">
+          <div className="fullscreen-header-nav">
+            <span className="group-badge">Grupo {activeMatchDetails.group || 'Geral'} • Rodada {activeMatchDetails.matchday || '1'}</span>
+            <div className="fullscreen-header-right">
+              <button className="close-btn" onClick={() => { setActiveMatchDetails(null); setMatchStats(null); setDetailsTab('palpites'); }} aria-label="Fechar">
+                <X size={20} />
+              </button>
             </div>
+          </div>
 
-            {/* Stadium Info */}
-            <div className="stadium-details-box">
-              <span className="stadium-icon">🏟️</span>
-              <div className="stadium-text">
-                <div className="stadium-name">{activeMatchDetails.stadiumName || 'Estádio não cadastrado'}</div>
-                <div className="stadium-location">{activeMatchDetails.stadiumCity || 'Cidade Desconhecida'}, {activeMatchDetails.stadiumCountry || 'País Desconhecido'}</div>
-                {activeMatchDetails.stadiumCapacity > 0 && (
-                  <div className="stadium-capacity">Capacidade: {activeMatchDetails.stadiumCapacity.toLocaleString('pt-BR')} pessoas</div>
-                )}
-              </div>
-            </div>
-
-            {/* Date and Status */}
-            <div className="match-time-status">
-              <span className="time-text">📅 {formatDate(activeMatchDetails.date)}</span>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                {activeMatchDetails.manuallyUpdated && (
-                  <span className="match-badge finished" style={{ background: '#f59e0b', color: '#fff' }}>
-                    Manual
-                  </span>
-                )}
-                <span className={`match-badge ${activeMatchDetails.status}`}>
-                  {activeMatchDetails.status === 'finished' ? 'Encerrado' : activeMatchDetails.status === 'live' ? `• ${activeMatchDetails.matchClock || 'AO VIVO'}` : 'Aberto'}
+          <div className="fullscreen-content-container">
+            {/* Permanent Match Header Card */}
+            <div className="match-detail-header-card glass-panel">
+              <div className="match-time-status">
+                <span className="time-text">
+                  📅 {formatDate(activeMatchDetails.date)} 
+                  {activeMatchDetails.stadiumName && ` • 🏟️ ${activeMatchDetails.stadiumName}`}
                 </span>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  {activeMatchDetails.manuallyUpdated && (
+                    <span className="match-badge finished" style={{ background: '#f59e0b', color: '#fff' }}>
+                      Manual
+                    </span>
+                  )}
+                  <span className={`match-badge ${activeMatchDetails.status}`}>
+                    {activeMatchDetails.status === 'finished' ? 'Encerrado' : activeMatchDetails.status === 'live' ? `• ${activeMatchDetails.matchClock || 'AO VIVO'}` : 'Aberto'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="details-scoreboard">
+                <div className="team-column">
+                  {renderTeamFlag(activeMatchDetails.teamA, "details-team-flag", activeMatchDetails.teamALogo)}
+                  <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamA}</span>
+                </div>
+
+                <div className="details-score-box">
+                  {activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live' ? (
+                    <div className="score-numbers">
+                      <span className="score-num">{activeMatchDetails.scoreA}</span>
+                      <span className="score-divider">-</span>
+                      <span className="score-num">{activeMatchDetails.scoreB}</span>
+                    </div>
+                  ) : (
+                    <span className="score-vs">VS</span>
+                  )}
+                </div>
+
+                <div className="team-column">
+                  {renderTeamFlag(activeMatchDetails.teamB, "details-team-flag", activeMatchDetails.teamBLogo)}
+                  <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamB}</span>
+                </div>
+              </div>
+
+              {(activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live') && (() => {
+                const homeScorersList = matchStats ? getScorersFromStats(matchStats, true) : parseScorers(activeMatchDetails.home_scorers);
+                const awayScorersList = matchStats ? getScorersFromStats(matchStats, false) : parseScorers(activeMatchDetails.away_scorers);
+                return (
+                  <div className="scorers-section">
+                    <div className="scorers-grid">
+                      <div className="scorers-list home-scorers">
+                        {homeScorersList.map((scorer, i) => (
+                          <div key={i} className="scorer-item">⚽ {scorer}</div>
+                        ))}
+                        {homeScorersList.length === 0 && <div className="no-scorers">-</div>}
+                      </div>
+                      <div className="scorers-divider"></div>
+                      <div className="scorers-list away-scorers">
+                        {awayScorersList.map((scorer, i) => (
+                          <div key={i} className="scorer-item">{scorer} ⚽</div>
+                        ))}
+                        {awayScorersList.length === 0 && <div className="no-scorers">-</div>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Tabs Navigation */}
+            <div className="details-tabs-container">
+              <div className="details-tabs">
+                <button className={`tab-btn ${detailsTab === 'palpites' ? 'active' : ''}`} onClick={() => setDetailsTab('palpites')}>Palpites</button>
+                <button className={`tab-btn ${detailsTab === 'estatisticas' ? 'active' : ''}`} onClick={() => setDetailsTab('estatisticas')}>Estatísticas</button>
+                <button className={`tab-btn ${detailsTab === 'escalacoes' ? 'active' : ''}`} onClick={() => setDetailsTab('escalacoes')}>Escalações</button>
+                <button className={`tab-btn ${detailsTab === 'historico' ? 'active' : ''}`} onClick={() => setDetailsTab('historico')}>Histórico</button>
+                <button className={`tab-btn ${detailsTab === 'lances' ? 'active' : ''}`} onClick={() => setDetailsTab('lances')}>Lances</button>
+                <button className={`tab-btn ${detailsTab === 'ficha' ? 'active' : ''}`} onClick={() => setDetailsTab('ficha')}>Info & Odds</button>
               </div>
             </div>
 
-            {/* Scoreboard display */}
-            <div className="details-scoreboard">
-              <div className="team-column">
-                {renderTeamFlag(activeMatchDetails.teamA, "details-team-flag", activeMatchDetails.teamALogo)}
-                <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamA}</span>
+            {/* Loading Indicator */}
+            {loadingStats && (
+              <div className="stats-loading-box glass-panel fade-in">
+                <div className="loading-spinner"></div>
+                <p style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>Buscando informações em tempo real...</p>
               </div>
+            )}
 
-              <div className="details-score-box">
-                {activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live' ? (
-                  <div className="score-numbers">
-                    <span className="score-num">{activeMatchDetails.scoreA}</span>
-                    <span className="score-divider">-</span>
-                    <span className="score-num">{activeMatchDetails.scoreB}</span>
-                  </div>
-                ) : (
-                  <span className="score-vs">VS</span>
-                )}
-              </div>
+            {/* Tab: Palpites */}
+            {!loadingStats && detailsTab === 'palpites' && (
+              <div className="tab-pane-content fade-in">
+                <div className="user-guess-details-panel glass-panel">
+                  {activeMatchDetails.userGuess ? (
+                    <div className="guess-info-alert">
+                      <span className="alert-title">Seu palpite registrado:</span>
+                      <div className="guess-score-pill">
+                        {activeMatchDetails.userGuess.scoreA} x {activeMatchDetails.userGuess.scoreB}
+                      </div>
+                      {activeMatchDetails.status === 'finished' && (
+                        <div className="guess-points-earned">
+                          Pontos ganhos: <strong style={{ color: 'var(--color-primary)' }}>+{activeMatchDetails.userGuess.points} pts</strong>
+                        </div>
+                      )}
+                      {activeMatchDetails.status === 'pending' && (
+                        <button 
+                          onClick={() => {
+                            setGuessModal({ isOpen: true, match: activeMatchDetails });
+                            setGuessForm({ 
+                              scoreA: activeMatchDetails.userGuess.scoreA.toString(), 
+                              scoreB: activeMatchDetails.userGuess.scoreB.toString() 
+                            });
+                            setActiveMatchDetails(null);
+                          }}
+                          className="btn btn-secondary"
+                          style={{ marginTop: '10px', width: '100%' }}
+                        >
+                          Alterar Palpite
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="no-guess-alert">
+                      {(new Date(activeMatchDetails.date) > new Date() && activeMatchDetails.status !== 'live') ? (
+                        <div>
+                          <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Você ainda não deu seu palpite para este jogo!</p>
+                          <button 
+                            onClick={() => {
+                              setGuessModal({ isOpen: true, match: activeMatchDetails });
+                              setGuessForm({ scoreA: '', scoreB: '' });
+                              setActiveMatchDetails(null);
+                            }}
+                            className="btn btn-primary"
+                            style={{ marginTop: '10px', width: '100%' }}
+                          >
+                            Dar Palpite
+                          </button>
+                        </div>
+                      ) : (
+                        <p style={{ color: 'var(--color-danger)', fontSize: '13px', fontWeight: '700' }}>Você não palpitou a tempo para este jogo.</p>
+                      )}
+                    </div>
+                  )}
+                  {user.role === 'admin' && viewMode === 'admin' && (
+                    <button 
+                      onClick={() => {
+                        setAdminGuessModal({ isOpen: true, match: activeMatchDetails });
+                        setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
+                        setActiveMatchDetails(null);
+                      }}
+                      className="btn btn-secondary"
+                      style={{ width: '100%', marginTop: '10px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
+                    >
+                      Palpitar por Outro
+                    </button>
+                  )}
+                </div>
 
-              <div className="team-column">
-                {renderTeamFlag(activeMatchDetails.teamB, "details-team-flag", activeMatchDetails.teamBLogo)}
-                <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamB}</span>
-              </div>
-            </div>
-
-            {/* Scorers */}
-            {(activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live') && (
-              <div className="scorers-section">
-                <h4 className="section-title">Gols da Partida ⚽</h4>
-                <div className="scorers-grid">
-                  <div className="scorers-list home-scorers">
-                    {parseScorers(activeMatchDetails.home_scorers).map((scorer, i) => (
-                      <div key={i} className="scorer-item">⚽ {scorer}</div>
-                    ))}
-                    {parseScorers(activeMatchDetails.home_scorers).length === 0 && <div className="no-scorers">-</div>}
-                  </div>
-                  <div className="scorers-divider"></div>
-                  <div className="scorers-list away-scorers">
-                    {parseScorers(activeMatchDetails.away_scorers).map((scorer, i) => (
-                      <div key={i} className="scorer-item">{scorer} ⚽</div>
-                    ))}
-                    {parseScorers(activeMatchDetails.away_scorers).length === 0 && <div className="no-scorers">-</div>}
-                  </div>
+                <div className="other-bets-section glass-panel">
+                  <h4 className="section-title">Palpites da Galera 👥</h4>
+                  {(new Date(activeMatchDetails.date) < new Date() || activeMatchDetails.status === 'live') ? (
+                    activeMatchDetails.otherGuesses && activeMatchDetails.otherGuesses.length > 0 ? (
+                      <div className="other-guesses-grid">
+                        {activeMatchDetails.otherGuesses.map((g, idx) => (
+                          <div key={idx} className="other-guess-card">
+                            <span className="other-guess-user">{g.userName}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px' }}>
+                              <span className="other-guess-score">{g.scoreA} x {g.scoreB}</span>
+                              {activeMatchDetails.status === 'finished' && (
+                                <span className="other-guess-points">+{g.points} pts</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="no-data-text">Ninguém palpitou neste jogo.</p>
+                    )
+                  ) : (
+                    <div className="bets-locked-message">
+                      🔒 Os palpites dos outros participantes ficarão visíveis assim que o jogo começar!
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {/* User Guess Panel */}
-            <div className="user-guess-details-panel">
-              {activeMatchDetails.userGuess ? (
-                <div className="guess-info-alert">
-                  <span className="alert-title">Seu palpite registrado:</span>
-                  <div className="guess-score-pill">
-                    {activeMatchDetails.userGuess.scoreA} x {activeMatchDetails.userGuess.scoreB}
-                  </div>
-                  {activeMatchDetails.status === 'finished' && (
-                    <div className="guess-points-earned">
-                      Pontos ganhos: <strong style={{ color: 'var(--color-primary)' }}>+{activeMatchDetails.userGuess.points} pts</strong>
-                    </div>
-                  )}
-                  {activeMatchDetails.status === 'pending' && (
-                    <button 
-                      onClick={() => {
-                        setGuessModal({ isOpen: true, match: activeMatchDetails });
-                        setGuessForm({ 
-                          scoreA: activeMatchDetails.userGuess.scoreA.toString(), 
-                          scoreB: activeMatchDetails.userGuess.scoreB.toString() 
-                        });
-                        setActiveMatchDetails(null);
-                      }}
-                      className="btn btn-secondary"
-                      style={{ marginTop: '10px', width: '100%' }}
-                    >
-                      Alterar Palpite
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="no-guess-alert">
-                  {(new Date(activeMatchDetails.date) > new Date() && activeMatchDetails.status !== 'live') ? (
-                    <div>
-                      <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Você ainda não deu seu palpite para este jogo!</p>
-                      <button 
-                        onClick={() => {
-                          setGuessModal({ isOpen: true, match: activeMatchDetails });
-                          setGuessForm({ scoreA: '', scoreB: '' });
-                          setActiveMatchDetails(null);
-                        }}
-                        className="btn btn-primary"
-                        style={{ marginTop: '10px', width: '100%' }}
-                      >
-                        Dar Palpite
-                      </button>
+            {/* Tab: Estatísticas */}
+            {!loadingStats && detailsTab === 'estatisticas' && (
+              <div className="tab-pane-content fade-in">
+                <div className="stats-section glass-panel">
+                  <h4 className="section-title" style={{ marginBottom: '20px' }}>Estatísticas de Jogo 📊</h4>
+                  {getStatsComparisonList().length > 0 ? (
+                    <div className="stats-list-wrapper">
+                      {getStatsComparisonList().map((item, idx) => {
+                        const numA = parseStatValue(item.valA);
+                        const numB = parseStatValue(item.valB);
+                        const total = numA + numB;
+                        
+                        let pctA = 50;
+                        let pctB = 50;
+                        if (item.name.toLowerCase().includes('pct') || item.valA.includes('%') || item.valB.includes('%')) {
+                          pctA = numA;
+                          pctB = numB;
+                        } else if (total > 0) {
+                          pctA = (numA / total) * 100;
+                          pctB = (numB / total) * 100;
+                        } else {
+                          pctA = 0;
+                          pctB = 0;
+                        }
+
+                        const teamAColor = matchStats.boxscore?.teams?.[0]?.team?.color ? `#${matchStats.boxscore.teams[0].team.color}` : 'var(--color-primary)';
+                        const teamBColor = matchStats.boxscore?.teams?.[1]?.team?.color ? `#${matchStats.boxscore.teams[1].team.color}` : '#3b82f6';
+
+                        return (
+                          <div key={idx} className="stat-row-item">
+                            <div className="stat-label-row">
+                              <span className="stat-val-a" style={{ color: pctA > pctB ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: pctA > pctB ? '700' : '500' }}>{item.valA}</span>
+                              <span className="stat-name-label">{item.label}</span>
+                              <span className="stat-val-b" style={{ color: pctB > pctA ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: pctB > pctA ? '700' : '500' }}>{item.valB}</span>
+                            </div>
+                            <div className="stat-bar-track">
+                              <div className="stat-bar-fill-a" style={{ width: `${pctA}%`, backgroundColor: teamAColor }}></div>
+                              <div className="stat-bar-fill-b" style={{ width: `${pctB}%`, backgroundColor: teamBColor }}></div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
-                    <p style={{ color: 'var(--color-danger)', fontSize: '13px', fontWeight: '700' }}>Você não palpitou a tempo para este jogo.</p>
+                    <p className="no-data-text">Estatísticas indisponíveis para esta partida.</p>
                   )}
                 </div>
-              )}
-              {user.role === 'admin' && viewMode === 'admin' && (
-                <button 
-                  onClick={() => {
-                    setAdminGuessModal({ isOpen: true, match: activeMatchDetails });
-                    setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
-                    setActiveMatchDetails(null);
-                  }}
-                  className="btn btn-secondary"
-                  style={{ width: '100%', marginTop: '10px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
-                >
-                  Palpitar por Outro
-                </button>
-              )}
-            </div>
 
-            {/* Other Bets (Galera) */}
-            <div className="other-bets-section">
-              <h4 className="section-title">Palpites da Galera 👥</h4>
-              {(new Date(activeMatchDetails.date) < new Date() || activeMatchDetails.status === 'live') ? (
-                activeMatchDetails.otherGuesses && activeMatchDetails.otherGuesses.length > 0 ? (
-                  <div className="other-guesses-grid">
-                    {activeMatchDetails.otherGuesses.map((g, idx) => (
-                      <div key={idx} className="other-guess-card">
-                        <span className="other-guess-user">{g.userName}</span>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px' }}>
-                          <span className="other-guess-score">{g.scoreA} x {g.scoreB}</span>
-                          {activeMatchDetails.status === 'finished' && (
-                            <span className="other-guess-points">+{g.points} pts</span>
-                          )}
+                {/* Individual Leaders highlights */}
+                {matchStats?.leaders && matchStats.leaders.length > 0 && (
+                  <div className="match-leaders-section glass-panel" style={{ marginTop: '20px' }}>
+                    <h4 className="section-title">Líderes Individuais 🏃‍♂️</h4>
+                    <div className="team-leaders-grid">
+                      {renderLeaderCategories(matchStats.leaders[0], activeMatchDetails.teamA)}
+                      {renderLeaderCategories(matchStats.leaders[1], activeMatchDetails.teamB)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab: Escalações */}
+            {!loadingStats && detailsTab === 'escalacoes' && (
+              <div className="tab-pane-content fade-in">
+                {matchStats?.rosters && (matchStats.rosters['0'] || matchStats.rosters['1']) ? (
+                  <div>
+                    {/* Coaches list if available */}
+                    {(matchStats.rosters['0']?.coach || matchStats.rosters['1']?.coach) && (
+                      <div className="coaches-comparison-card glass-panel" style={{ marginBottom: '20px', padding: '12px 20px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Técnico do {activeMatchDetails.teamA}</span>
+                            <strong style={{ fontSize: '13px' }}>{matchStats.rosters['0']?.coach?.displayName || '-'}</strong>
+                          </div>
+                          <span style={{ fontSize: '18px' }}>📋</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Técnico do {activeMatchDetails.teamB}</span>
+                            <strong style={{ fontSize: '13px' }}>{matchStats.rosters['1']?.coach?.displayName || '-'}</strong>
+                          </div>
                         </div>
                       </div>
-                    ))}
+                    )}
+
+                    <div className="rosters-comparison-grid">
+                      {renderRosterList(matchStats.rosters['0'] || matchStats.rosters[0], activeMatchDetails.teamA)}
+                      {renderRosterList(matchStats.rosters['1'] || matchStats.rosters[1], activeMatchDetails.teamB)}
+                    </div>
                   </div>
                 ) : (
-                  <p className="no-data-text">Ninguém palpitou neste jogo.</p>
-                )
-              ) : (
-                <div className="bets-locked-message">
-                  🔒 Os palpites dos outros participantes ficarão visíveis assim que o jogo começar!
+                  <div className="glass-panel" style={{ padding: '30px', textAlign: 'center' }}>
+                    <p className="no-data-text">Escalações ainda não divulgadas para este confronto.</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab: Histórico */}
+            {!loadingStats && detailsTab === 'historico' && (
+              <div className="tab-pane-content fade-in">
+                {/* Recent Form Section */}
+                <div className="form-comparison-section glass-panel">
+                  <h4 className="section-title" style={{ marginBottom: '16px' }}>Desempenho Recente (Últimos Jogos) 📈</h4>
+                  <div className="form-columns-grid">
+                    <div className="team-form-column">
+                      <h5 className="form-team-title">
+                        {renderTeamFlag(activeMatchDetails.teamA, "form-team-flag", activeMatchDetails.teamALogo)}
+                        <span>{activeMatchDetails.teamA}</span>
+                      </h5>
+                      {matchStats?.lastFiveGames?.[0] ? renderFormList(matchStats.lastFiveGames[0]) : <p className="no-data-text">Forma indisponível.</p>}
+                    </div>
+
+                    <div className="form-divider-vertical"></div>
+
+                    <div className="team-form-column">
+                      <h5 className="form-team-title">
+                        {renderTeamFlag(activeMatchDetails.teamB, "form-team-flag", activeMatchDetails.teamBLogo)}
+                        <span>{activeMatchDetails.teamB}</span>
+                      </h5>
+                      {matchStats?.lastFiveGames?.[1] ? renderFormList(matchStats.lastFiveGames[1]) : <p className="no-data-text">Forma indisponível.</p>}
+                    </div>
+                  </div>
                 </div>
-              )}
+
+                {/* Head-to-Head records */}
+                {matchStats?.headToHeadGames && matchStats.headToHeadGames[0]?.events?.length > 0 && (
+                  <div className="h2h-history-section glass-panel" style={{ marginTop: '20px' }}>
+                    <h4 className="section-title">Confrontos Diretos Recentes ⚔️</h4>
+                    <div className="h2h-list">
+                      {matchStats.headToHeadGames[0].events.map((e, idx) => (
+                        <div key={idx} className="h2h-match-card">
+                          <span className="h2h-date">{new Date(e.gameDate).toLocaleDateString('pt-BR')}</span>
+                          <span className="h2h-comp">{e.competitionName}</span>
+                          <div className="h2h-scoreboard">
+                            <span className="h2h-team">{activeMatchDetails.teamA}</span>
+                            <span className="h2h-score">{e.score}</span>
+                            <span className="h2h-team">{e.opponent?.displayName}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Live Standings block */}
+                {matchStats?.standings && (
+                  <div className="match-standings-wrapper">
+                    {renderStandingsTable(matchStats.standings)}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab: Lances */}
+            {!loadingStats && detailsTab === 'lances' && (
+              <div className="tab-pane-content fade-in">
+                {/* Key Events timeline */}
+                <div className="key-events-timeline-section glass-panel">
+                  <h4 className="section-title" style={{ marginBottom: '24px' }}>Linha do Tempo de Lances ⚡</h4>
+                  {matchStats?.keyEvents ? renderTimeline(matchStats.keyEvents) : <p className="no-data-text">Ainda não há lances registrados para esta partida.</p>}
+                </div>
+
+                {/* Text commentary */}
+                {matchStats?.commentary && matchStats.commentary.length > 0 && (
+                  <div className="commentary-box glass-panel" style={{ marginTop: '20px' }}>
+                    <h5 className="section-title" style={{ marginBottom: '16px' }}>Narração Minuto a Minuto 🎙️</h5>
+                    <div className="commentary-feed-list">
+                      {matchStats.commentary.map((c, idx) => (
+                        <div key={idx} className="commentary-row">
+                          {c.time?.displayValue ? (
+                            <span className="commentary-time">{c.time.displayValue}</span>
+                          ) : (
+                            <span className="commentary-time-placeholder">•</span>
+                          )}
+                          <span className="commentary-text">{c.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab: Ficha & Odds */}
+            {!loadingStats && detailsTab === 'ficha' && (
+              <div className="tab-pane-content fade-in">
+                <div className="info-details-grid">
+                  
+                  {/* Ficha Técnica Card */}
+                  <div className="ficha-tecnica-card glass-panel">
+                    <h5 className="section-title" style={{ marginBottom: '16px' }}>Ficha Técnica 🏟️</h5>
+                    <div className="info-list">
+                      <div className="info-item">
+                        <span className="info-label">Estádio:</span>
+                        <span className="info-value">{matchStats?.gameInfo?.venue?.fullName || activeMatchDetails.stadiumName || '-'}</span>
+                      </div>
+                      <div className="info-item">
+                        <span className="info-label">Cidade:</span>
+                        <span className="info-value">
+                          {matchStats?.gameInfo?.venue?.address?.city || activeMatchDetails.stadiumCity || '-'}, {matchStats?.gameInfo?.venue?.address?.country || activeMatchDetails.stadiumCountry || '-'}
+                        </span>
+                      </div>
+                      {(activeMatchDetails.stadiumCapacity > 0) && (
+                        <div className="info-item">
+                          <span className="info-label">Capacidade:</span>
+                          <span className="info-value">{activeMatchDetails.stadiumCapacity.toLocaleString('pt-BR')} pessoas</span>
+                        </div>
+                      )}
+                      {matchStats?.gameInfo?.attendance > 0 && (
+                        <div className="info-item">
+                          <span className="info-label">Público presente:</span>
+                          <span className="info-value">{matchStats.gameInfo.attendance.toLocaleString('pt-BR')} espectadores</span>
+                        </div>
+                      )}
+                      {matchStats?.gameInfo?.officials && matchStats.gameInfo.officials.length > 0 && (
+                        <div className="info-item">
+                          <span className="info-label">Arbitragem:</span>
+                          <span className="info-value">
+                            {matchStats.gameInfo.officials.map((o, idx) => (
+                              <span key={idx} style={{ display: 'block', fontSize: '13px' }}>
+                                {o.fullName} ({o.position?.displayName || 'Árbitro'})
+                              </span>
+                            ))}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Broadcasts channels */}
+                  <div className="broadcasts-card glass-panel">
+                    <h5 className="section-title" style={{ marginBottom: '16px' }}>Onde Assistir 📺</h5>
+                    {matchStats?.broadcasts && matchStats.broadcasts.length > 0 ? (
+                      <div className="broadcasts-grid">
+                        {matchStats.broadcasts.map((b, idx) => (
+                          <div key={idx} className="broadcast-item-card">
+                            <span className="broadcast-channel">🎥 {b.media?.name || b.media?.shortName}</span>
+                            <div className="broadcast-meta" style={{ marginTop: '4px' }}>
+                              <span className="broadcast-badge">{b.region?.toUpperCase() || 'Global'}</span>
+                              {b.lang && <span className="broadcast-lang">{b.lang === 'pt' ? 'Português' : b.lang === 'en' ? 'Inglês' : b.lang === 'es' ? 'Espanhol' : b.lang}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="no-data-text">Nenhuma emissora de transmissão cadastrada.</p>
+                    )}
+                  </div>
+
+                  {/* Odds and Predictions */}
+                  <div className="odds-card glass-panel">
+                    <h5 className="section-title" style={{ marginBottom: '16px' }}>Odds & Probabilidades 🎲</h5>
+                    {matchStats?.odds && matchStats.odds.length > 0 ? (
+                      matchStats.odds.map((o, idx) => (
+                        <div key={idx} className="odds-provider-block" style={{ marginBottom: idx < matchStats.odds.length - 1 ? '16px' : '0' }}>
+                          <span className="odds-provider-title" style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>
+                            Provedor: <strong>{o.provider?.name || 'Default'}</strong>
+                          </span>
+                          <div className="odds-grid-details">
+                            {o.details && (
+                              <div className="odds-detail-item">
+                                <span className="odd-label">Prognóstico</span>
+                                <span className="odd-val">{o.details}</span>
+                              </div>
+                            )}
+                            {o.overUnder && (
+                              <div className="odds-detail-item">
+                                <span className="odd-label">Gols +/-</span>
+                                <span className="odd-val">{o.overUnder}</span>
+                              </div>
+                            )}
+                            {o.homeTeamOdds?.moneyLine && (
+                              <div className="odds-detail-item">
+                                <span className="odd-label">Vitória {activeMatchDetails.teamA}</span>
+                                <span className="odd-val">{o.homeTeamOdds.moneyLine > 0 ? `+${o.homeTeamOdds.moneyLine}` : o.homeTeamOdds.moneyLine}</span>
+                              </div>
+                            )}
+                            {o.drawOdds?.moneyLine && (
+                              <div className="odds-detail-item">
+                                <span className="odd-label">Empate</span>
+                                <span className="odd-val">{o.drawOdds.moneyLine > 0 ? `+${o.drawOdds.moneyLine}` : o.drawOdds.moneyLine}</span>
+                              </div>
+                            )}
+                            {o.awayTeamOdds?.moneyLine && (
+                              <div className="odds-detail-item">
+                                <span className="odd-label">Vitória {activeMatchDetails.teamB}</span>
+                                <span className="odd-val">{o.awayTeamOdds.moneyLine > 0 ? `+${o.awayTeamOdds.moneyLine}` : o.awayTeamOdds.moneyLine}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="no-data-text">Odds indisponíveis para este confronto.</p>
+                    )}
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+          </div>
+        </div>
+      )}
+
+      {/* Rules Modal (Popup) */}
+      {isRulesModalOpen && (
+        <div className="modal-overlay" style={{ zIndex: 1000 }}>
+          <div className="modal-content glass-panel" style={{ maxWidth: '600px', width: '90%', maxHeight: '90vh', overflowY: 'auto' }}>
+            <button className="modal-close" onClick={() => setIsRulesModalOpen(false)} aria-label="Fechar">
+              <X size={18} />
+            </button>
+            <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <HelpCircle size={22} style={{ color: 'var(--color-primary)' }} />
+              Regras de Pontuação
+            </h3>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '13px', lineHeight: '150%' }}>
+                Seus palpites são comparados com os resultados oficiais da partida. Você sempre receberá a pontuação correspondente ao seu <strong>melhor acerto</strong> no jogo.
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div className="rule-card" style={{ padding: '12px' }}>
+                  <div className="rule-info">
+                    <span className="rule-name" style={{ fontSize: '14px', fontWeight: '700' }}>Placar Exato 🎯</span>
+                    <span className="rule-desc" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acertar perfeitamente a quantidade de gols de ambos os times (ex: palpite 2x1, resultado 2x1).</span>
+                  </div>
+                  <span className="rule-points" style={{ fontWeight: '800', color: 'var(--color-primary)' }}>25 pts</span>
+                </div>
+
+                <div className="rule-card" style={{ padding: '12px' }}>
+                  <div className="rule-info">
+                    <span className="rule-name" style={{ fontSize: '14px', fontWeight: '700' }}>Vencedor e Saldo de Gols ⚖️</span>
+                    <span className="rule-desc" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acertar o vencedor e a diferença de gols do placar final (ex: palpite 3x1, resultado 2x0 - saldo de +2).</span>
+                  </div>
+                  <span className="rule-points" style={{ fontWeight: '800', color: 'var(--color-primary)' }}>18 pts</span>
+                </div>
+
+                <div className="rule-card" style={{ padding: '12px' }}>
+                  <div className="rule-info">
+                    <span className="rule-name" style={{ fontSize: '14px', fontWeight: '700' }}>Vencedor e Gols do Ganhador ⚽</span>
+                    <span className="rule-desc" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acertar quem venceu e a quantidade de gols que o vencedor fez (ex: palpite 2x1, resultado 2x0).</span>
+                  </div>
+                  <span className="rule-points" style={{ fontWeight: '800', color: 'var(--color-primary)' }}>15 pts</span>
+                </div>
+
+                <div className="rule-card" style={{ padding: '12px' }}>
+                  <div className="rule-info">
+                    <span className="rule-name" style={{ fontSize: '14px', fontWeight: '700' }}>Empate com placar diferente 🤝</span>
+                    <span className="rule-desc" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acertar que o jogo terminaria empatado, mas errar a quantidade exata de gols (ex: palpite 1x1, resultado 2x2).</span>
+                  </div>
+                  <span className="rule-points" style={{ fontWeight: '800', color: 'var(--color-primary)' }}>15 pts</span>
+                </div>
+
+                <div className="rule-card" style={{ padding: '12px' }}>
+                  <div className="rule-info">
+                    <span className="rule-name" style={{ fontSize: '14px', fontWeight: '700' }}>Vencedor e Gols do Perdedor 🥅</span>
+                    <span className="rule-desc" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acertar quem venceu e a quantidade de gols que o perdedor fez (ex: palpite 2x1, resultado 3x1).</span>
+                  </div>
+                  <span className="rule-points" style={{ fontWeight: '800', color: 'var(--color-primary)' }}>12 pts</span>
+                </div>
+
+                <div className="rule-card" style={{ padding: '12px' }}>
+                  <div className="rule-info">
+                    <span className="rule-name" style={{ fontSize: '14px', fontWeight: '700' }}>Apenas Vencedor 🏃‍♂️</span>
+                    <span className="rule-desc" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acertar apenas quem ganharia o jogo, sem acertar gols ou saldo (ex: palpite 2x1, resultado 3x0).</span>
+                  </div>
+                  <span className="rule-points" style={{ fontWeight: '800', color: 'var(--color-primary)' }}>10 pts</span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                <Info size={16} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+                <span>Os palpites da galera só ficam visíveis para os outros participantes depois que o cronômetro do jogo começar para evitar cópias estratégicas.</span>
+              </div>
             </div>
           </div>
         </div>
