@@ -809,7 +809,7 @@ app.get('/api/matches', async (req, res) => {
 
   try {
     // Trigger sync in the background (non-blocking) to keep database updated.
-    // Vercel Cron will also handle keeping the DB updated.
+    // GitHub Actions também dispara /api/sync-cron periodicamente.
     syncWithWorldCupAPI(league).catch(err => console.error('Background sync error:', err));
     const db = await getData();
     // Filter matches for the selected league
@@ -1893,7 +1893,7 @@ app.post('/api/users/settings', async (req, res) => {
 });
 
 app.get('/api/sync-cron', async (req, res) => {
-  // Validate authentication if Vercel CRON_SECRET is configured
+  // Valida autenticação quando CRON_SECRET está configurado (GitHub Actions envia o Bearer token).
   const authHeader = req.headers.authorization;
   if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     console.log('Unauthorized cron access attempt.');
