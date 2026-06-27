@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { getData, saveData, runExclusive } from './db.js';
+import webpush from 'web-push';
 
 const app = express();
 
@@ -501,10 +502,10 @@ function extractScorers(competition, teamId) {
   return `{${goals.join(',')}}`;
 }
 
-async function syncWithWorldCupAPI(league = 'fifa.world') {
+async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
   const now = Date.now();
   const lastSync = lastSyncTimes[league] || 0;
-  if (now - lastSync < 30000) {
+  if (!force && (now - lastSync < 30000)) {
     // Cache de 30 segundos por campeonato
     return;
   }
@@ -555,6 +556,7 @@ async function syncWithWorldCupAPI(league = 'fifa.world') {
 
     if (allEvents.length === 0) return;
 
+    const updatedMatchesToNotify = [];
     await runExclusive(async () => {
       const db = await getData();
       let dbChanged = false;
@@ -605,11 +607,16 @@ async function syncWithWorldCupAPI(league = 'fifa.world') {
 
         // Extract match clock/minute info from ESPN
         let matchClock = null;
+        let clockUpdatedAt = match ? match.clockUpdatedAt : null;
         if (newStatus === 'live') {
           // shortDetail gives nicely formatted strings like "1st Half 23'", "HT", "2nd Half 67'"
           matchClock = e.status?.type?.shortDetail || e.status?.displayClock || null;
+          if (!match || match.matchClock !== matchClock || !clockUpdatedAt) {
+            clockUpdatedAt = new Date().toISOString();
+          }
         } else if (newStatus === 'finished') {
           matchClock = 'FT';
+          clockUpdatedAt = null;
         }
 
         const scoreA = homeCompetitor.score === 'null' || homeCompetitor.score === null || homeCompetitor.score === undefined ? null : parseInt(homeCompetitor.score);
@@ -631,6 +638,7 @@ async function syncWithWorldCupAPI(league = 'fifa.world') {
             scoreB: scoreB,
             status: newStatus,
             matchClock: matchClock,
+            clockUpdatedAt: clockUpdatedAt,
             home_scorers: homeScorers,
             away_scorers: awayScorers,
             group: e.competitions[0].groups || '', 
@@ -671,6 +679,7 @@ async function syncWithWorldCupAPI(league = 'fifa.world') {
             realAwayScorers = match.away_scorers;
           }
 
+          const oldMatch = { ...match };
           if (
             match.status !== newStatus || 
             match.scoreA !== realScoreA || 
@@ -681,12 +690,14 @@ async function syncWithWorldCupAPI(league = 'fifa.world') {
             match.teamBLogo !== (logoB || null) ||
             match.teamA !== realTeamA ||
             match.teamB !== realTeamB ||
-            match.matchClock !== matchClock
+            match.matchClock !== matchClock ||
+            match.clockUpdatedAt !== clockUpdatedAt
           ) {
             match.scoreA = realScoreA;
             match.scoreB = realScoreB;
             match.status = newStatus;
             match.matchClock = matchClock;
+            match.clockUpdatedAt = clockUpdatedAt;
             match.home_scorers = realHomeScorers;
             match.away_scorers = realAwayScorers;
             match.teamALogo = logoA || null;
@@ -694,13 +705,17 @@ async function syncWithWorldCupAPI(league = 'fifa.world') {
             match.teamA = realTeamA;
             match.teamB = realTeamB;
             dbChanged = true;
+            updatedMatchesToNotify.push({ oldMatch, newMatch: { ...match } });
           }
         }
 
         // Se o jogo acabou e ainda não computou os palpites localmente
-        if (newStatus === 'finished' && db.guesses.some(g => g.matchId === match.id && g.points === null)) {
+        if (newStatus === 'finished' && db.guesses.some(g => g.matchId === match.id && g.points === null && (!g.status || g.status === 'approved'))) {
           db.guesses = db.guesses.map(guess => {
             if (guess.matchId === match.id) {
+              if (guess.status === 'pending' || guess.status === 'rejected') {
+                return { ...guess, points: null };
+              }
               const isHomeTeamA = normalizeTeam(homeCompetitor.team.displayName) === normalizeTeam(match.teamA);
               const finalScoreA = isHomeTeamA ? scoreA : scoreB;
               const finalScoreB = isHomeTeamA ? scoreB : scoreA;
@@ -715,6 +730,13 @@ async function syncWithWorldCupAPI(league = 'fifa.world') {
 
       if (dbChanged) {
         await saveData(db);
+        if (updatedMatchesToNotify.length > 0) {
+          setTimeout(async () => {
+            for (const item of updatedMatchesToNotify) {
+              await checkAndSendPushNotificationsForMatch(item.oldMatch, item.newMatch);
+            }
+          }, 0);
+        }
       }
     });
 
@@ -774,7 +796,7 @@ app.post('/api/login', async (req, res) => {
       }
     });
 
-    res.json({ id: user.id, name: user.name, role: user.role });
+    res.json({ id: user.id, name: user.name, role: user.role, notificationSettings: user.notificationSettings || null });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Erro no servidor durante o login.' });
@@ -786,7 +808,9 @@ app.get('/api/matches', async (req, res) => {
   const { userName, league = 'fifa.world' } = req.query;
 
   try {
-    await syncWithWorldCupAPI(league);
+    // Trigger sync in the background (non-blocking) to keep database updated.
+    // Vercel Cron will also handle keeping the DB updated.
+    syncWithWorldCupAPI(league).catch(err => console.error('Background sync error:', err));
     const db = await getData();
     // Filter matches for the selected league
     const matches = db.matches.filter(m => (m.league || 'fifa.world') === league);
@@ -803,7 +827,7 @@ app.get('/api/matches', async (req, res) => {
       let otherGuesses = [];
       if (isLocked) {
         otherGuesses = guesses
-          .filter(g => g.matchId === match.id && g.userName.toLowerCase() !== userName?.toString().toLowerCase())
+          .filter(g => g.matchId === match.id && g.userName.toLowerCase() !== userName?.toString().toLowerCase() && (!g.status || g.status === 'approved'))
           .map(g => ({
             userName: g.userName,
             scoreA: g.scoreA,
@@ -814,7 +838,7 @@ app.get('/api/matches', async (req, res) => {
 
       return {
         ...match,
-        userGuess: userGuess ? { scoreA: userGuess.scoreA, scoreB: userGuess.scoreB, points: userGuess.points } : null,
+        userGuess: userGuess ? { scoreA: userGuess.scoreA, scoreB: userGuess.scoreB, points: userGuess.points, status: userGuess.status } : null,
         otherGuesses
       };
     });
@@ -999,12 +1023,16 @@ app.post('/api/guesses', async (req, res) => {
         return;
       }
 
-      // Check if match already started
-      const isLocked = match.status === 'finished' || new Date(match.date) < new Date();
-      if (isLocked && requesterRole !== 'admin') {
+      // Check if match already finished
+      if (match.status === 'finished' && requesterRole !== 'admin') {
         errorResponse = { status: 400, error: 'As apostas para este jogo já estão encerradas.' };
         return;
       }
+
+      const hasStarted = new Date(match.date) < new Date() || match.status === 'live';
+      const status = hasStarted ? (requesterRole === 'admin' ? 'approved' : 'pending') : 'approved';
+      const guessClock = hasStarted ? (match.matchClock || '0\'') : null;
+      const matchScoreAtGuess = (hasStarted && match.scoreA !== null && match.scoreB !== null) ? `${match.scoreA}-${match.scoreB}` : null;
 
       // Find or create guess
       let guess = db.guesses.find(g => g.matchId === matchId && g.userName.toLowerCase() === userName.toLowerCase());
@@ -1013,6 +1041,14 @@ app.post('/api/guesses', async (req, res) => {
         guess.scoreA = parseInt(scoreA);
         guess.scoreB = parseInt(scoreB);
         guess.updatedAt = new Date().toISOString();
+        guess.status = status;
+        if (hasStarted) {
+          guess.guessClock = guessClock;
+          guess.matchScoreAtGuess = matchScoreAtGuess;
+        } else {
+          delete guess.guessClock;
+          delete guess.matchScoreAtGuess;
+        }
       } else {
         guess = {
           id: `${userName.toLowerCase()}_${matchId}`,
@@ -1021,13 +1057,18 @@ app.post('/api/guesses', async (req, res) => {
           scoreA: parseInt(scoreA),
           scoreB: parseInt(scoreB),
           points: null,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          status
         };
+        if (hasStarted) {
+          guess.guessClock = guessClock;
+          guess.matchScoreAtGuess = matchScoreAtGuess;
+        }
         db.guesses.push(guess);
       }
 
-      // Se o jogo já acabou, calcula os pontos do palpite imediatamente
-      if (match.status === 'finished') {
+      // Se o jogo já acabou, calcula os pontos do palpite imediatamente (apenas se aprovado)
+      if (match.status === 'finished' && guess.status === 'approved') {
         guess.points = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
       } else {
         guess.points = null;
@@ -1067,6 +1108,9 @@ app.post('/api/results', async (req, res) => {
     let resultMatch;
     let errorResponse = null;
 
+    let oldMatchForPush = null;
+    let newMatchForPush = null;
+
     await runExclusive(async () => {
       const db = await getData();
       const match = db.matches.find(m => m.id === matchId);
@@ -1076,6 +1120,8 @@ app.post('/api/results', async (req, res) => {
         return;
       }
 
+      oldMatchForPush = { ...match };
+
       // Update match result
       match.scoreA = finalScoreA;
       match.scoreB = finalScoreB;
@@ -1083,9 +1129,12 @@ app.post('/api/results', async (req, res) => {
       match.resultUpdatedAt = new Date().toISOString();
       match.manuallyUpdated = true;
 
-      // Calculate points for all guesses for this match
+      // Calculate points for all guesses for this match (only approved ones)
       db.guesses = db.guesses.map(guess => {
         if (guess.matchId === matchId) {
+          if (guess.status === 'pending' || guess.status === 'rejected') {
+            return { ...guess, points: null };
+          }
           const points = calculatePoints(guess.scoreA, guess.scoreB, finalScoreA, finalScoreB);
           return {
             ...guess,
@@ -1097,7 +1146,14 @@ app.post('/api/results', async (req, res) => {
 
       await saveData(db);
       resultMatch = match;
+      newMatchForPush = { ...match };
     });
+
+    if (oldMatchForPush && newMatchForPush) {
+      setTimeout(() => {
+        checkAndSendPushNotificationsForMatch(oldMatchForPush, newMatchForPush);
+      }, 0);
+    }
 
     if (errorResponse) {
       return res.status(errorResponse.status).json({ error: errorResponse.error });
@@ -1165,6 +1221,7 @@ app.get('/api/ranking', async (req, res) => {
       const userGuesses = guesses.filter(g => 
         g.userName.toLowerCase() === user.name.toLowerCase() && 
         g.points !== null &&
+        (!g.status || g.status === 'approved') &&
         leagueMatchIds.has(g.matchId)
       );
       
@@ -1186,6 +1243,7 @@ app.get('/api/ranking', async (req, res) => {
       const winnerOnly = userGuesses.filter(g => g.points === 10).length;
       const totalGuesses = guesses.filter(g => 
         g.userName.toLowerCase() === user.name.toLowerCase() &&
+        (!g.status || g.status === 'approved') &&
         leagueMatchIds.has(g.matchId)
       ).length;
 
@@ -1199,7 +1257,7 @@ app.get('/api/ranking', async (req, res) => {
       const liveMatches = leagueMatches.filter(m => m.status === 'live');
       liveMatches.forEach(match => {
         const guess = guesses.find(g => g.matchId === match.id && g.userName.toLowerCase() === user.name.toLowerCase());
-        if (guess && match.scoreA !== null && match.scoreB !== null) {
+        if (guess && (!guess.status || guess.status === 'approved') && match.scoreA !== null && match.scoreB !== null) {
           const pts = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
           livePoints += pts;
           if (pts === 25) projectedExactScores++;
@@ -1292,6 +1350,132 @@ app.post('/api/users/adjust-points', async (req, res) => {
   }
 });
 
+// 6.1.1 Obter palpites pendentes de aprovação (Admin)
+app.get('/api/admin/guesses/pending', async (req, res) => {
+  const { league = 'fifa.world', requesterRole } = req.query;
+
+  if (requesterRole !== 'admin') {
+    return res.status(403).json({ error: 'Apenas administradores podem visualizar palpites pendentes.' });
+  }
+
+  try {
+    const db = await getData();
+    const matches = db.matches.filter(m => (m.league || 'fifa.world') === league);
+    const matchIds = new Set(matches.map(m => m.id));
+
+    const pendingGuesses = db.guesses
+      .filter(g => g.status === 'pending' && matchIds.has(g.matchId))
+      .map(g => {
+        const match = matches.find(m => m.id === g.matchId);
+        return {
+          id: g.id,
+          userName: g.userName,
+          matchId: g.matchId,
+          scoreA: g.scoreA,
+          scoreB: g.scoreB,
+          guessClock: g.guessClock,
+          matchScoreAtGuess: g.matchScoreAtGuess,
+          createdAt: g.createdAt,
+          updatedAt: g.updatedAt,
+          teamA: match ? match.teamA : '',
+          teamB: match ? match.teamB : '',
+          teamALogo: match ? match.teamALogo : null,
+          teamBLogo: match ? match.teamBLogo : null
+        };
+      });
+
+    res.json(pendingGuesses);
+  } catch (error) {
+    console.error('Error fetching pending guesses:', error);
+    res.status(500).json({ error: 'Erro ao buscar palpites pendentes.' });
+  }
+});
+
+// 6.1.2 Aprovar palpite (Admin)
+app.post('/api/admin/guesses/approve', async (req, res) => {
+  const { guessId, requesterRole } = req.body;
+
+  if (requesterRole !== 'admin') {
+    return res.status(403).json({ error: 'Apenas administradores podem aprovar palpites.' });
+  }
+
+  try {
+    let resultGuess;
+    let errorResponse = null;
+
+    await runExclusive(async () => {
+      const db = await getData();
+      const guess = db.guesses.find(g => g.id === guessId);
+
+      if (!guess) {
+        errorResponse = { status: 404, error: 'Palpite não encontrado.' };
+        return;
+      }
+
+      const match = db.matches.find(m => m.id === guess.matchId);
+      guess.status = 'approved';
+
+      // If the match is already finished, calculate points immediately
+      if (match && match.status === 'finished') {
+        guess.points = calculatePoints(guess.scoreA, guess.scoreB, match.scoreA, match.scoreB);
+      } else {
+        guess.points = null;
+      }
+
+      await saveData(db);
+      resultGuess = guess;
+    });
+
+    if (errorResponse) {
+      return res.status(errorResponse.status).json({ error: errorResponse.error });
+    }
+
+    res.json({ message: 'Palpite aprovado com sucesso!', guess: resultGuess });
+  } catch (error) {
+    console.error('Error approving guess:', error);
+    res.status(500).json({ error: 'Erro ao aprovar palpite.' });
+  }
+});
+
+// 6.1.3 Rejeitar palpite (Admin)
+app.post('/api/admin/guesses/reject', async (req, res) => {
+  const { guessId, requesterRole } = req.body;
+
+  if (requesterRole !== 'admin') {
+    return res.status(403).json({ error: 'Apenas administradores podem rejeitar palpites.' });
+  }
+
+  try {
+    let resultGuess;
+    let errorResponse = null;
+
+    await runExclusive(async () => {
+      const db = await getData();
+      const guess = db.guesses.find(g => g.id === guessId);
+
+      if (!guess) {
+        errorResponse = { status: 404, error: 'Palpite não encontrado.' };
+        return;
+      }
+
+      guess.status = 'rejected';
+      guess.points = null;
+
+      await saveData(db);
+      resultGuess = guess;
+    });
+
+    if (errorResponse) {
+      return res.status(errorResponse.status).json({ error: errorResponse.error });
+    }
+
+    res.json({ message: 'Palpite rejeitado com sucesso!', guess: resultGuess });
+  } catch (error) {
+    console.error('Error rejecting guess:', error);
+    res.status(500).json({ error: 'Erro ao rejeitar palpite.' });
+  }
+});
+
 // 6.2 Recalcular Todos os Pontos do Bolão (Admin)
 app.post('/api/admin/recalculate', async (req, res) => {
   const { requesterRole, league = 'fifa.world' } = req.body;
@@ -1317,6 +1501,14 @@ app.post('/api/admin/recalculate', async (req, res) => {
         const match = db.matches.find(m => m.id === guess.matchId);
         if (!match) {
           return guess;
+        }
+
+        if (guess.status === 'pending' || guess.status === 'rejected') {
+          const oldPoints = guess.points;
+          if (oldPoints !== null) {
+            count++;
+          }
+          return { ...guess, points: null };
         }
 
         if (match.status === 'finished') {
@@ -1415,6 +1607,9 @@ app.post('/api/copa2026/simulate-live', async (req, res) => {
     let resultMatches = [];
     let errorResponse = null;
 
+    let oldMatchForPush = null;
+    let newMatchForPush = null;
+
     await runExclusive(async () => {
       const db = await getData();
       const leagueMatches = db.matches.filter(m => (m.league || 'fifa.world') === league);
@@ -1430,6 +1625,7 @@ app.post('/api/copa2026/simulate-live', async (req, res) => {
       let liveMatch = leagueMatches.find(m => m.status === 'live');
 
       if (liveMatch) {
+        oldMatchForPush = { ...liveMatch };
         // 50% de chance de gol, 50% de encerrar a partida
         if (Math.random() > 0.5) {
           const isTeamA = Math.random() > 0.5;
@@ -1443,24 +1639,30 @@ app.post('/api/copa2026/simulate-live', async (req, res) => {
           liveMatch.status = 'finished';
           message = `FIM DE JOGO! Placar oficial: ${liveMatch.teamA} ${liveMatch.scoreA} x ${liveMatch.scoreB} ${liveMatch.teamB}. Pontuações calculadas!`;
 
-          // Calcula pontos para todos os palpites
+          // Calcula pontos para todos os palpites (apenas os aprovados)
           db.guesses = db.guesses.map(guess => {
             if (guess.matchId === liveMatch.id) {
+              if (guess.status === 'pending' || guess.status === 'rejected') {
+                return { ...guess, points: null };
+              }
               const points = calculatePoints(guess.scoreA, guess.scoreB, liveMatch.scoreA, liveMatch.scoreB);
               return { ...guess, points };
             }
             return guess;
           });
         }
+        newMatchForPush = { ...liveMatch };
         changed = true;
       } else {
         // Nenhum jogo ao vivo, inicia um pendente
         let pendingMatch = leagueMatches.find(m => m.status === 'pending');
         if (pendingMatch) {
+          oldMatchForPush = { ...pendingMatch };
           pendingMatch.status = 'live';
           pendingMatch.scoreA = 0;
           pendingMatch.scoreB = 0;
           message = `BOLA ROLANDO! O jogo ${pendingMatch.teamA} vs ${pendingMatch.teamB} começou e está AO VIVO!`;
+          newMatchForPush = { ...pendingMatch };
           changed = true;
         } else {
           message = 'Todos os jogos cadastrados já estão encerrados!';
@@ -1473,6 +1675,12 @@ app.post('/api/copa2026/simulate-live', async (req, res) => {
       resultMatches = db.matches.filter(m => (m.league || 'fifa.world') === league);
     });
 
+    if (oldMatchForPush && newMatchForPush) {
+      setTimeout(() => {
+        checkAndSendPushNotificationsForMatch(oldMatchForPush, newMatchForPush);
+      }, 0);
+    }
+
     if (errorResponse) {
       return res.status(errorResponse.status).json({ error: errorResponse.error });
     }
@@ -1483,6 +1691,400 @@ app.post('/api/copa2026/simulate-live', async (req, res) => {
     res.status(500).json({ error: 'Erro ao simular progresso do jogo.' });
   }
 });
+
+// --- WEB PUSH CONFIGURATION & ROUTING ---
+let vapidPublic = '';
+let vapidPrivate = '';
+
+async function initVapidKeys() {
+  const db = await getData();
+  if (!db.vapidKeys) {
+    const keys = webpush.generateVAPIDKeys();
+    db.vapidKeys = keys;
+    await saveData(db);
+    console.log('Generated new VAPID keys and saved to DB.');
+  }
+  vapidPublic = db.vapidKeys.publicKey;
+  vapidPrivate = db.vapidKeys.privateKey;
+  
+  webpush.setVapidDetails(
+    'mailto:admin@bolao-futebol.local',
+    vapidPublic,
+    vapidPrivate
+  );
+  console.log('Web Push VAPID keys set successfully.');
+}
+
+// Initialize VAPID keys
+initVapidKeys().catch(console.error);
+
+// Send Web Push Notification to a user
+async function sendPushNotification(userName, payload) {
+  const db = await getData();
+  if (!db.pushSubscriptions || db.pushSubscriptions.length === 0) return;
+  
+  const userSubs = db.pushSubscriptions.filter(s => s.userName.toLowerCase() === userName.toLowerCase());
+  if (userSubs.length === 0) return;
+
+  const payloadString = JSON.stringify(payload);
+  const deadEndpoints = [];
+  
+  const promises = userSubs.map(async (sub) => {
+    try {
+      await webpush.sendNotification(sub.subscription, payloadString);
+    } catch (err) {
+      if (err.statusCode === 410 || err.statusCode === 404) {
+        deadEndpoints.push(sub.subscription.endpoint);
+      } else {
+        console.error(`Error sending push to ${userName}:`, err.message || err);
+      }
+    }
+  });
+  
+  await Promise.all(promises);
+  
+  if (deadEndpoints.length > 0) {
+    await runExclusive(async () => {
+      const dbUpdate = await getData();
+      dbUpdate.pushSubscriptions = dbUpdate.pushSubscriptions.filter(
+        s => !deadEndpoints.includes(s.subscription.endpoint)
+      );
+      await saveData(dbUpdate);
+      console.log(`Cleaned up ${deadEndpoints.length} expired push subscriptions.`);
+    });
+  }
+}
+
+// Compare old and new match and send goal/start/finish alerts
+async function checkAndSendPushNotificationsForMatch(oldMatch, newMatch) {
+  if (!oldMatch) return;
+  
+  const scoreAChanged = newMatch.scoreA !== oldMatch.scoreA;
+  const scoreBChanged = newMatch.scoreB !== oldMatch.scoreB;
+  const statusChanged = newMatch.status !== oldMatch.status;
+  
+  if (!scoreAChanged && !scoreBChanged && !statusChanged) return;
+  
+  const db = await getData();
+  const users = db.users || [];
+  
+  for (const user of users) {
+    const settings = user.notificationSettings || {
+      goals: true,
+      matchStarted: true,
+      matchFinished: true
+    };
+    
+    // Alerta de Gols
+    if (settings.goals && newMatch.status === 'live' && (scoreAChanged || scoreBChanged)) {
+      const goalsA = (newMatch.scoreA || 0) - (oldMatch.scoreA || 0);
+      const goalsB = (newMatch.scoreB || 0) - (oldMatch.scoreB || 0);
+      
+      let title = "⚽ GOL!";
+      let body = "";
+      if (goalsA > 0) {
+        body = `Gol do ${newMatch.teamA}! Placar: ${newMatch.teamA} ${newMatch.scoreA} x ${newMatch.scoreB} ${newMatch.teamB}`;
+      } else if (goalsB > 0) {
+        body = `Gol do ${newMatch.teamB}! Placar: ${newMatch.teamA} ${newMatch.scoreA} x ${newMatch.scoreB} ${newMatch.teamB}`;
+      } else {
+        title = "🖥️ Placar Alterado (VAR)";
+        body = `Placar atualizado: ${newMatch.teamA} ${newMatch.scoreA} x ${newMatch.scoreB} ${newMatch.teamB}`;
+      }
+      
+      await sendPushNotification(user.name, {
+        title,
+        body,
+        url: `/?match=${newMatch.id}`
+      });
+    }
+    
+    // Alerta de Início de Partida
+    if (settings.matchStarted && statusChanged && newMatch.status === 'live') {
+      await sendPushNotification(user.name, {
+        title: "⏱️ Bola Rolando!",
+        body: `Começou: ${newMatch.teamA} vs ${newMatch.teamB}`,
+        url: `/?match=${newMatch.id}`
+      });
+    }
+    
+    // Alerta de Fim de Partida
+    if (settings.matchFinished && statusChanged && newMatch.status === 'finished') {
+      await sendPushNotification(user.name, {
+        title: "🏁 Fim de Jogo!",
+        body: `Resultado Final: ${newMatch.teamA} ${newMatch.scoreA} x ${newMatch.scoreB} ${newMatch.teamB}`,
+        url: `/?match=${newMatch.id}`
+      });
+    }
+  }
+}
+
+// Endpoints
+app.get('/api/notifications/vapid-public-key', async (req, res) => {
+  if (!vapidPublic) {
+    await initVapidKeys();
+  }
+  res.json({ publicKey: vapidPublic });
+});
+
+app.post('/api/notifications/subscribe', async (req, res) => {
+  const { subscription, userName } = req.body;
+  if (!subscription || !userName) {
+    return res.status(400).json({ error: 'Faltam assinatura ou usuário.' });
+  }
+  try {
+    await runExclusive(async () => {
+      const db = await getData();
+      if (!db.pushSubscriptions) {
+        db.pushSubscriptions = [];
+      }
+      
+      const idx = db.pushSubscriptions.findIndex(s => s.subscription.endpoint === subscription.endpoint);
+      if (idx >= 0) {
+        db.pushSubscriptions[idx].userName = userName;
+      } else {
+        db.pushSubscriptions.push({ userName, subscription });
+      }
+      await saveData(db);
+    });
+    res.status(201).json({ success: true });
+  } catch (error) {
+    console.error('Error subscribing to push:', error);
+    res.status(500).json({ error: 'Erro ao registrar assinatura.' });
+  }
+});
+
+app.post('/api/notifications/test', async (req, res) => {
+  const { userName } = req.body;
+  if (!userName) {
+    return res.status(400).json({ error: 'Falta o nome de usuário.' });
+  }
+  try {
+    await sendPushNotification(userName, {
+      title: '🔔 Teste de Notificação!',
+      body: 'Parabéns! Suas notificações push do Bolão de Futebol estão configuradas e funcionando corretamente.',
+      url: '/'
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Failed to send test push:', err);
+    res.status(500).json({ error: 'Erro ao enviar notificação de teste.' });
+  }
+});
+
+app.post('/api/users/settings', async (req, res) => {
+  const { userName, settings } = req.body;
+  if (!userName || !settings) {
+    return res.status(400).json({ error: 'Faltam dados de configurações.' });
+  }
+  try {
+    await runExclusive(async () => {
+      const db = await getData();
+      const user = db.users.find(u => u.name.toLowerCase() === userName.toLowerCase());
+      if (user) {
+        user.notificationSettings = settings;
+        await saveData(db);
+      }
+    });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error saving user settings:', error);
+    res.status(500).json({ error: 'Erro ao salvar configurações.' });
+  }
+});
+
+app.get('/api/sync-cron', async (req, res) => {
+  // Validate authentication if Vercel CRON_SECRET is configured
+  const authHeader = req.headers.authorization;
+  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    console.log('Unauthorized cron access attempt.');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const startTime = Date.now();
+  console.log('Cron sync triggered.');
+
+  try {
+    const { getLock, releaseLock } = await import('./db.js');
+    
+    // Tenta adquirir lock por 55 segundos (tempo máximo de execução)
+    const lockAcquired = await getLock('cron_active', 55);
+    if (!lockAcquired) {
+      console.log('Another cron instance is already running. Skipping execution.');
+      return res.status(200).json({ message: 'Another cron instance is running.' });
+    }
+
+    const db = await getData();
+    const leagues = ['fifa.world', 'bra.1', 'uefa.champions', 'eng.1', 'esp.1'];
+    
+    const activeLeagues = new Set();
+    const now = Date.now();
+    
+    if (db.matches && db.matches.length > 0) {
+      for (const match of db.matches) {
+        const matchTime = new Date(match.date).getTime();
+        const startDiff = (matchTime - now) / 60000;
+        
+        const isLive = match.status === 'live';
+        const isUpcoming = match.status === 'pending' && startDiff >= -10 && startDiff <= 15;
+        
+        if (isLive || isUpcoming) {
+          const league = match.league || 'fifa.world';
+          if (leagues.includes(league)) {
+            activeLeagues.add(league);
+          }
+        }
+      }
+    }
+
+    // Executa verificação de lembretes de palpites pendentes
+    await checkAndSendPushReminders();
+
+    if (activeLeagues.size === 0) {
+      // Nenhum jogo ao vivo ou próximo: faz sincronização única de todas as ligas e sai
+      console.log('No live or upcoming matches found. Performing single-pass sync for all leagues.');
+      for (const league of leagues) {
+        try {
+          await syncWithWorldCupAPI(league, true);
+        } catch (err) {
+          console.error(`Error in cron single-pass sync for ${league}:`, err);
+        }
+      }
+      await releaseLock('cron_active');
+      console.log('Cron single-pass sync complete.');
+      return res.status(200).json({ message: 'Single-pass sync complete. No active live games.' });
+    }
+
+    // Temos ligas com jogos ao vivo ou prestes a começar: inicia loop de alta frequência
+    console.log(`Active leagues for high-frequency live polling: ${Array.from(activeLeagues).join(', ')}`);
+    
+    while (Date.now() - startTime < 55000) {
+      const loopStart = Date.now();
+      
+      for (const league of activeLeagues) {
+        try {
+          await syncWithWorldCupAPI(league, true);
+        } catch (err) {
+          console.error(`Error during high-frequency sync for league ${league}:`, err);
+        }
+      }
+      
+      const elapsed = Date.now() - loopStart;
+      const sleepTime = 5000 - elapsed; // Polling a cada 5 segundos
+      if (sleepTime > 0) {
+        await new Promise(resolve => setTimeout(resolve, sleepTime));
+      }
+    }
+
+    await releaseLock('cron_active');
+    console.log('Cron high-frequency polling completed successfully.');
+    return res.status(200).json({ message: 'High-frequency polling complete.' });
+  } catch (error) {
+    console.error('Error in cron handler:', error);
+    try {
+      const { releaseLock } = await import('./db.js');
+      await releaseLock('cron_active');
+    } catch (lockErr) {
+      console.error('Failed to release lock in error handler:', lockErr);
+    }
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Helper do scheduler para verificar palpites pendentes
+async function checkAndSendPushReminders() {
+  try {
+    const db = await getData();
+    const now = Date.now();
+    
+    if (!db.matches || db.matches.length === 0) return;
+    
+    if (!db.sentPushReminders) {
+      db.sentPushReminders = {};
+    }
+    
+    let dbChanged = false;
+    
+    for (const match of db.matches) {
+      if (match.status !== 'pending') continue;
+      
+      const matchTime = new Date(match.date).getTime();
+      const diffMs = matchTime - now;
+      const diffMins = diffMs / 60000;
+      
+      if (diffMins <= 0) continue;
+      
+      const matchId = match.id;
+      if (!db.sentPushReminders[matchId]) {
+        db.sentPushReminders[matchId] = {};
+      }
+      
+      const thresholds = [
+        { time: 60, key: 'remind1h', label: '1 hora' },
+        { time: 30, key: 'remind30m', label: '30 minutos' },
+        { time: 15, key: 'remind15m', label: '15 minutos' },
+        { time: 5, key: 'remind5m', label: '5 minutos' }
+      ];
+      
+      for (const t of thresholds) {
+        if (db.sentPushReminders[matchId][t.time]) continue;
+        
+        // Window check: time - 3 to time + 1 minutes
+        if (diffMins >= t.time - 3 && diffMins <= t.time + 1) {
+          const usersWithoutGuess = db.users.filter(user => {
+            const hasGuess = db.guesses.some(
+              g => g.matchId === matchId && g.userName.toLowerCase() === user.name.toLowerCase()
+            );
+            return !hasGuess;
+          });
+          
+          if (usersWithoutGuess.length > 0) {
+            for (const user of usersWithoutGuess) {
+              const settings = user.notificationSettings || {
+                betReminders: true,
+                remind1h: true,
+                remind30m: true,
+                remind15m: true,
+                remind5m: true
+              };
+              
+              if (settings[t.key]) {
+                await sendPushNotification(user.name, {
+                  title: "📝 Palpite Pendente!",
+                  body: `O jogo ${match.teamA} vs ${match.teamB} começa em ${t.label}. Não esqueça de palpitar!`,
+                  url: `/?match=${matchId}`
+                });
+              }
+            }
+          }
+          
+          db.sentPushReminders[matchId][t.time] = true;
+          dbChanged = true;
+        }
+      }
+    }
+    
+    if (dbChanged) {
+      await runExclusive(async () => {
+        const latestDb = await getData();
+        if (!latestDb.sentPushReminders) {
+          latestDb.sentPushReminders = {};
+        }
+        latestDb.sentPushReminders = {
+          ...latestDb.sentPushReminders,
+          ...db.sentPushReminders
+        };
+        await saveData(latestDb);
+      });
+    }
+  } catch (error) {
+    console.error('Error in push reminder scheduler:', error);
+  }
+}
+
+// Executa o scheduler localmente a cada 60 segundos se não estiver na Vercel
+if (!process.env.VERCEL) {
+  setInterval(checkAndSendPushReminders, 60000);
+}
 
 export default app;
 

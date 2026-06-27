@@ -20,7 +20,13 @@ import {
   Eye,
   EyeOff,
   X,
-  Award
+  Award,
+  ExternalLink,
+  Sliders,
+  Bell,
+  BellOff,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 
 // Team emoji auto-mapper (legacy fallback)
@@ -163,6 +169,83 @@ const renderTeamFlag = (name, className = "team-flag", logoUrl = null) => {
   return <TeamFlagImage name={name} className={className} logoUrl={logoUrl} />;
 };
 
+const getTeamColors = (teamName) => {
+  const name = (teamName || '').toLowerCase().trim();
+  const colorMap = {
+    'brasil': { bg: '#15803d', text: '#ffffff' },
+    'brazil': { bg: '#15803d', text: '#ffffff' },
+    'argentina': { bg: '#74acdf', text: '#0a0f1d' },
+    'alemanha': { bg: '#111827', text: '#ffffff' },
+    'germany': { bg: '#111827', text: '#ffffff' },
+    'espanha': { bg: '#b91c1c', text: '#ffffff' },
+    'spain': { bg: '#b91c1c', text: '#ffffff' },
+    'frança': { bg: '#1e3a8a', text: '#ffffff' },
+    'france': { bg: '#1e3a8a', text: '#ffffff' },
+    'inglaterra': { bg: '#ef4444', text: '#ffffff' },
+    'england': { bg: '#ef4444', text: '#ffffff' },
+    'itália': { bg: '#1d4ed8', text: '#ffffff' },
+    'italy': { bg: '#1d4ed8', text: '#ffffff' },
+    'holanda': { bg: '#f97316', text: '#ffffff' },
+    'netherlands': { bg: '#f97316', text: '#ffffff' },
+    'portugal': { bg: '#991b1b', text: '#ffffff' },
+    'uruguai': { bg: '#60a5fa', text: '#0a0f1d' },
+    'uruguay': { bg: '#60a5fa', text: '#0a0f1d' },
+    'méxico': { bg: '#047857', text: '#ffffff' },
+    'mexico': { bg: '#047857', text: '#ffffff' },
+    'estados unidos': { bg: '#0f172a', text: '#ffffff' },
+    'usa': { bg: '#0f172a', text: '#ffffff' },
+    'united states': { bg: '#0f172a', text: '#ffffff' },
+    'japão': { bg: '#172554', text: '#ffffff' },
+    'japan': { bg: '#172554', text: '#ffffff' },
+    'coreia do sul': { bg: '#be123c', text: '#ffffff' },
+    'south korea': { bg: '#be123c', text: '#ffffff' },
+    'colômbia': { bg: '#eab308', text: '#0a0f1d' },
+    'colombia': { bg: '#eab308', text: '#0a0f1d' },
+    'croácia': { bg: '#e11d48', text: '#ffffff' },
+    'croatia': { bg: '#e11d48', text: '#ffffff' },
+    'bélgica': { bg: '#991b1b', text: '#ffffff' },
+    'belgium': { bg: '#991b1b', text: '#ffffff' },
+    'senegal': { bg: '#047857', text: '#ffffff' },
+    'marrocos': { bg: '#be123c', text: '#ffffff' },
+    'morocco': { bg: '#be123c', text: '#ffffff' },
+    'canadá': { bg: '#be123c', text: '#ffffff' },
+    'canada': { bg: '#be123c', text: '#ffffff' },
+    'austrália': { bg: '#ca8a04', text: '#ffffff' },
+    'australia': { bg: '#ca8a04', text: '#ffffff' },
+    'turquia': { bg: '#be123c', text: '#ffffff' },
+    'turkey': { bg: '#be123c', text: '#ffffff' },
+    'suíça': { bg: '#be123c', text: '#ffffff' },
+    'switzerland': { bg: '#be123c', text: '#ffffff' },
+    'dinamarca': { bg: '#be123c', text: '#ffffff' },
+    'denmark': { bg: '#be123c', text: '#ffffff' },
+    'panamá': { bg: '#be123c', text: '#ffffff' },
+    'panama': { bg: '#be123c', text: '#ffffff' },
+    'south africa': { bg: '#047857', text: '#ffffff' },
+    'czech republic': { bg: '#1d4ed8', text: '#ffffff' },
+    'república checa': { bg: '#1d4ed8', text: '#ffffff' },
+    'paraguai': { bg: '#be123c', text: '#ffffff' },
+    'paraguay': { bg: '#be123c', text: '#ffffff' },
+    'bósnia': { bg: '#1e40af', text: '#ffffff' },
+    'bosnia': { bg: '#1e40af', text: '#ffffff' },
+    'haiti': { bg: '#1d4ed8', text: '#ffffff' },
+    'escócia': { bg: '#1e3a8a', text: '#ffffff' },
+    'scotland': { bg: '#1e3a8a', text: '#ffffff' },
+  };
+
+  if (colorMap[name]) return colorMap[name];
+
+  for (const key in colorMap) {
+    if (name.includes(key)) return colorMap[key];
+  }
+
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const h = Math.abs(hash) % 360;
+  return { bg: `hsl(${h}, 70%, 25%)`, text: '#ffffff' };
+};
+
 const getGuessFilterLabel = (filter) => {
   if (filter === 'all') return 'Todos';
   if (filter === 'guessed') return 'Palpitados';
@@ -176,6 +259,65 @@ const getTimeFilterLabel = (filter) => {
   if (filter === 'finished') return 'Encerrados';
   if (filter === 'future') return 'Futuros';
   return '';
+};
+
+const MatchClock = ({ match, customFinishedText, customPendingText, prefix = '' }) => {
+  const [displayClock, setDisplayClock] = useState('');
+
+  useEffect(() => {
+    if (match.status !== 'live') {
+      if (match.status === 'finished') {
+        setDisplayClock(customFinishedText || 'Fim');
+      } else {
+        setDisplayClock(customPendingText || 'Aberto');
+      }
+      return;
+    }
+
+    const updateClock = () => {
+      const baseClock = match.matchClock || 'AO VIVO';
+      const clockUpdatedAt = match.clockUpdatedAt;
+
+      if (!clockUpdatedAt || baseClock === 'HT' || baseClock === 'Intervalo' || baseClock.includes('HT') || baseClock.includes('Inter')) {
+        setDisplayClock(baseClock);
+        return;
+      }
+
+      // Parse current match clock (e.g. "23'", "1st Half 23'", "90+3'")
+      let baseMins = 0;
+      const plusMatch = baseClock.match(/(\d+)\+(\d+)/);
+      if (plusMatch) {
+        baseMins = parseInt(plusMatch[1], 10) + parseInt(plusMatch[2], 10);
+      } else {
+        const singleMatch = baseClock.match(/(\d+)/);
+        if (singleMatch) {
+          baseMins = parseInt(singleMatch[1], 10);
+        }
+      }
+
+      const updatedTime = new Date(clockUpdatedAt).getTime();
+      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - updatedTime) / 1000));
+      
+      const totalSeconds = baseMins * 60 + elapsedSeconds;
+      const currentMins = Math.floor(totalSeconds / 60);
+      const currentSecs = totalSeconds % 60;
+      const timeStr = `${currentMins}:${String(currentSecs).padStart(2, '0')}`;
+
+      // Replaces pattern: \d+(\+\d+)?'? with timeStr
+      const newDisplay = baseClock.replace(/\d+(\+\d+)?'?/, timeStr);
+      setDisplayClock(newDisplay);
+    };
+
+    updateClock();
+    const interval = setInterval(updateClock, 1000);
+    return () => clearInterval(interval);
+  }, [match.status, match.matchClock, match.clockUpdatedAt, customFinishedText, customPendingText]);
+
+  if (match.status === 'live') {
+    return <>{prefix}{displayClock}</>;
+  }
+
+  return <>{displayClock}</>;
 };
 
 const LeagueDropdown = ({ selectedLeague, setSelectedLeague }) => {
@@ -370,6 +512,64 @@ const LeagueDropdown = ({ selectedLeague, setSelectedLeague }) => {
 };
 
 
+function calculateLivePoints(guessA, guessB, resultA, resultB) {
+  const gA = parseInt(guessA);
+  const gB = parseInt(guessB);
+  const rA = parseInt(resultA);
+  const rB = parseInt(resultB);
+
+  if (isNaN(gA) || isNaN(gB) || isNaN(rA) || isNaN(rB)) {
+    return 0;
+  }
+
+  // 1. Exact score
+  if (gA === rA && gB === rB) {
+    return 25;
+  }
+
+  const guessWinner = gA > gB ? 'A' : (gB > gA ? 'B' : 'Draw');
+  const resultWinner = rA > rB ? 'A' : (rB > rA ? 'B' : 'Draw');
+
+  // If winner is wrong, 0 points
+  if (guessWinner !== resultWinner) {
+    return 0;
+  }
+
+  // Draw with different score
+  if (resultWinner === 'Draw') {
+    return 15;
+  }
+
+  // Winner correct, check sub-criteria
+  const guessDiff = gA - gB;
+  const resultDiff = rA - rB;
+  const isDiffCorrect = guessDiff === resultDiff;
+
+  const winnerTeam = resultWinner;
+  const loserTeam = resultWinner === 'A' ? 'B' : 'A';
+
+  const guessWinnerGoals = winnerTeam === 'A' ? gA : gB;
+  const resultWinnerGoals = winnerTeam === 'A' ? rA : rB;
+  const isWinnerGoalsCorrect = guessWinnerGoals === resultWinnerGoals;
+
+  const guessLoserGoals = loserTeam === 'A' ? gA : gB;
+  const resultLoserGoals = loserTeam === 'A' ? rA : rB;
+  const isLoserGoalsCorrect = guessLoserGoals === resultLoserGoals;
+
+  if (isDiffCorrect) {
+    return 18;
+  }
+  if (isWinnerGoalsCorrect) {
+    return 15;
+  }
+  if (isLoserGoalsCorrect) {
+    return 12;
+  }
+
+  return 10;
+}
+
+
 function App() {
   // Authentication & session
   const [user, setUser] = useState(() => {
@@ -386,9 +586,11 @@ function App() {
   const [matchesLoaded, setMatchesLoaded] = useState(false);
   const [rankingLoaded, setRankingLoaded] = useState(false);
   const [guessFilter, setGuessFilter] = useState('all'); // 'all', 'guessed', 'missing'
-  const [timeFilter, setTimeFilter] = useState('all'); // 'all', 'near', 'finished', 'future'
-  const [guessDropdownOpen, setGuessDropdownOpen] = useState(false);
-  const [timeDropdownOpen, setTimeDropdownOpen] = useState(false);
+  const [sectionsOpen, setSectionsOpen] = useState({
+    live: true,
+    soon: true,
+    finished: false,
+  });
   const [showProjection, setShowProjection] = useState(false);
   const [viewMode, setViewMode] = useState(() => {
     const savedUser = localStorage.getItem('bolao_user');
@@ -404,6 +606,7 @@ function App() {
   const [resultModal, setResultModal] = useState({ isOpen: false, match: null });
   const [newMatchModal, setNewMatchModal] = useState(false);
   const [adminGuessModal, setAdminGuessModal] = useState({ isOpen: false, match: null });
+  const [pendingGuesses, setPendingGuesses] = useState([]);
   const [adjustmentModalOpen, setAdjustmentModalOpen] = useState(false);
   const [selectedUserForAdjustment, setSelectedUserForAdjustment] = useState(null);
   
@@ -430,6 +633,335 @@ function App() {
     selectedLeagueRef.current = selectedLeague;
   }, [selectedLeague]);
 
+  // --- NOTIFICATIONS STATE & LOGIC ---
+  const [notificationSettings, setNotificationSettings] = useState(() => {
+    const savedUser = localStorage.getItem('bolao_user');
+    const parsedUser = savedUser ? JSON.parse(savedUser) : null;
+    const userName = parsedUser?.name;
+    if (userName) {
+      const savedSettings = localStorage.getItem(`bolao_notif_settings_${userName}`);
+      if (savedSettings) {
+        return JSON.parse(savedSettings);
+      }
+    }
+    return {
+      goals: true,
+      matchStarted: true,
+      matchFinished: true,
+      remind1h: true,
+      remind30m: true,
+      remind15m: true,
+      remind5m: true,
+      soundEnabled: true
+    };
+  });
+
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [notificationPermissionStatus, setNotificationPermissionStatus] = useState(() => {
+    if (!('Notification' in window)) return 'denied';
+    return Notification.permission;
+  });
+
+  // Sync settings when user logs in or user details are updated
+  useEffect(() => {
+    if (user && user.notificationSettings) {
+      setNotificationSettings(user.notificationSettings);
+      localStorage.setItem(`bolao_notif_settings_${user.name}`, JSON.stringify(user.notificationSettings));
+    }
+  }, [user]);
+
+  const updateNotificationSettings = async (newSettings) => {
+    setNotificationSettings(newSettings);
+    if (user?.name) {
+      localStorage.setItem(`bolao_notif_settings_${user.name}`, JSON.stringify(newSettings));
+      try {
+        await fetch('/api/users/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userName: user.name, settings: newSettings })
+        });
+      } catch (err) {
+        console.error("Failed to save settings on server:", err);
+      }
+    }
+  };
+
+  const urlBase64ToUint8Array = (base64String) => {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+      .replace(/\-/g, '+')
+      .replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
+  const subscribeToPushNotifications = async (silent = false) => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      if (!silent) showToast('Push não suportado neste navegador/dispositivo.', 'error');
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermissionStatus(permission);
+      if (permission !== 'granted') {
+        if (!silent) showToast('Permissão de notificações negada.', 'error');
+        return;
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      
+      // Clear any existing subscription to prevent key conflicts (InvalidStateError)
+      const existingSubscription = await registration.pushManager.getSubscription();
+      if (existingSubscription) {
+        await existingSubscription.unsubscribe();
+        console.log('Unsubscribed from old push subscription to avoid key conflicts.');
+      }
+      
+      const keyRes = await fetch('/api/notifications/vapid-public-key');
+      if (!keyRes.ok) throw new Error('Failed to fetch VAPID key');
+      const { publicKey } = await keyRes.json();
+      
+      const subscribeOptions = {
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey)
+      };
+
+      const subscription = await registration.pushManager.subscribe(subscribeOptions);
+      console.log('Registered Push Subscription:', subscription);
+
+      const subRes = await fetch('/api/notifications/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscription,
+          userName: user.name
+        })
+      });
+
+      if (subRes.ok) {
+        if (!silent) showToast('Notificações ativadas com sucesso!');
+      } else {
+        throw new Error('Server subscription failed');
+      }
+    } catch (err) {
+      console.error('Failed to subscribe to push notifications:', err);
+      if (!silent) showToast('Erro ao ativar notificações.', 'error');
+    }
+  };
+
+  // Automatically register Push subscription if user is logged in and permission is already granted
+  useEffect(() => {
+    if (user && notificationPermissionStatus === 'granted') {
+      subscribeToPushNotifications(true);
+    }
+  }, [user, notificationPermissionStatus]);
+
+  const sendTestPushNotification = async () => {
+    if (!user?.name) return;
+    try {
+      const res = await fetch('/api/notifications/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userName: user.name })
+      });
+      if (res.ok) {
+        showToast('Notificação de teste enviada!');
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'Erro ao enviar teste.', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Erro de conexão ao enviar teste.', 'error');
+    }
+  };
+
+  const playSoundEffect = (type) => {
+    if (!notificationSettings.soundEnabled) return;
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+
+      if (type === 'goal') {
+        const playWhistle = (startTime, duration) => {
+          const osc = ctx.createOscillator();
+          const mod = ctx.createOscillator();
+          const modGain = ctx.createGain();
+          const mainGain = ctx.createGain();
+
+          osc.type = 'sine';
+          osc.frequency.value = 2000;
+
+          mod.type = 'sine';
+          mod.frequency.value = 35;
+          modGain.gain.value = 150;
+
+          mainGain.gain.setValueAtTime(0, startTime);
+          mainGain.gain.linearRampToValueAtTime(0.3, startTime + 0.05);
+          mainGain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+
+          mod.connect(modGain);
+          modGain.connect(osc.frequency);
+          osc.connect(mainGain);
+          mainGain.connect(ctx.destination);
+
+          osc.start(startTime);
+          mod.start(startTime);
+          osc.stop(startTime + duration);
+          mod.stop(startTime + duration);
+        };
+
+        playWhistle(ctx.currentTime, 0.2);
+        playWhistle(ctx.currentTime + 0.25, 0.2);
+        playWhistle(ctx.currentTime + 0.5, 0.5);
+      } else if (type === 'start' || type === 'finish') {
+        const osc = ctx.createOscillator();
+        const mod = ctx.createOscillator();
+        const modGain = ctx.createGain();
+        const mainGain = ctx.createGain();
+
+        osc.type = 'sine';
+        osc.frequency.value = 1800;
+
+        mod.type = 'sine';
+        mod.frequency.value = 30;
+        modGain.gain.value = 120;
+
+        mainGain.gain.setValueAtTime(0, ctx.currentTime);
+        mainGain.gain.linearRampToValueAtTime(0.25, ctx.currentTime + 0.05);
+        mainGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+
+        mod.connect(modGain);
+        modGain.connect(osc.frequency);
+        osc.connect(mainGain);
+        mainGain.connect(ctx.destination);
+
+        osc.start();
+        mod.start();
+        osc.stop(ctx.currentTime + 0.8);
+        mod.stop(ctx.currentTime + 0.8);
+      } else {
+        const playChime = (freq, startTime, duration) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+
+          osc.type = 'sine';
+          osc.frequency.value = freq;
+
+          gain.gain.setValueAtTime(0, startTime);
+          gain.gain.linearRampToValueAtTime(0.15, startTime + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+
+          osc.start(startTime);
+          osc.stop(startTime + duration);
+        };
+
+        playChime(587.33, ctx.currentTime, 0.4);
+        playChime(880, ctx.currentTime + 0.15, 0.6);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const prevMatchesRef = React.useRef([]);
+
+  // Client-side sound effects for real-time match events when browsing
+  useEffect(() => {
+    if (!user || !matches || matches.length === 0) {
+      if (matches && matches.length > 0) {
+        prevMatchesRef.current = matches;
+      }
+      return;
+    }
+
+    if (prevMatchesRef.current.length === 0) {
+      prevMatchesRef.current = matches;
+      return;
+    }
+
+    const prevMatches = prevMatchesRef.current;
+
+    matches.forEach(newMatch => {
+      const oldMatch = prevMatches.find(m => m.id === newMatch.id);
+      if (!oldMatch) return;
+
+      const scoreAChanged = newMatch.scoreA !== oldMatch.scoreA;
+      const scoreBChanged = newMatch.scoreB !== oldMatch.scoreB;
+      const statusChanged = newMatch.status !== oldMatch.status;
+
+      if (newMatch.status === 'live' && (scoreAChanged || scoreBChanged)) {
+        const goalsA = (newMatch.scoreA || 0) - (oldMatch.scoreA || 0);
+        const goalsB = (newMatch.scoreB || 0) - (oldMatch.scoreB || 0);
+        if (goalsA > 0 || goalsB > 0) {
+          playSoundEffect('goal');
+        }
+      }
+
+      if (newMatch.status === 'live' && oldMatch.status === 'pending') {
+        playSoundEffect('start');
+      }
+
+      if (newMatch.status === 'finished' && oldMatch.status === 'live') {
+        playSoundEffect('finish');
+      }
+    });
+
+    prevMatchesRef.current = matches;
+  }, [matches, user, notificationSettings.soundEnabled]);
+
+  // Sync activeMatchDetails when matches array updates (e.g. results or guesses are saved)
+  useEffect(() => {
+    if (activeMatchDetails) {
+      const updatedMatch = matches.find(m => m.id === activeMatchDetails.id);
+      if (updatedMatch) {
+        setActiveMatchDetails(updatedMatch);
+      }
+    }
+  }, [matches]);
+
+  // Disable body scroll when any modal or fullscreen match details is open
+  useEffect(() => {
+    const isAnyModalOpen = 
+      !!activeMatchDetails || 
+      guessModal.isOpen || 
+      resultModal.isOpen || 
+      newMatchModal || 
+      adminGuessModal.isOpen || 
+      adjustmentModalOpen || 
+      isRulesModalOpen ||
+      isSettingsModalOpen;
+      
+    if (isAnyModalOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [
+    activeMatchDetails, 
+    guessModal.isOpen, 
+    resultModal.isOpen, 
+    newMatchModal, 
+    adminGuessModal.isOpen, 
+    adjustmentModalOpen, 
+    isRulesModalOpen,
+    isSettingsModalOpen
+  ]);
+
+
   // Auto-hide toast
   useEffect(() => {
     if (toast) {
@@ -438,17 +970,6 @@ function App() {
     }
   }, [toast]);
 
-  // Close dropdowns when clicking outside
-  useEffect(() => {
-    const handleOutsideClick = (event) => {
-      if (!event.target.closest('.custom-dropdown')) {
-        setGuessDropdownOpen(false);
-        setTimeDropdownOpen(false);
-      }
-    };
-    document.addEventListener('click', handleOutsideClick);
-    return () => document.removeEventListener('click', handleOutsideClick);
-  }, []);
 
   // Fetch detailed statistics when activeMatchDetails is opened
   useEffect(() => {
@@ -581,6 +1102,12 @@ function App() {
     }
   }, [user, selectedLeague]);
 
+
+  useEffect(() => {
+    if (user && user.role === 'admin' && viewMode === 'admin' && activeTab === 'admin') {
+      fetchPendingGuesses();
+    }
+  }, [user, viewMode, activeTab, selectedLeague]);
 
   // Handle Login / Registration
   const handleLogin = async (e) => {
@@ -847,6 +1374,70 @@ function App() {
       showToast('Erro de rede ao ajustar pontuação.', 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fetch pending guesses for approval (Admin)
+  const fetchPendingGuesses = async () => {
+    if (!user || user.role !== 'admin') return;
+    try {
+      const res = await fetch(`/api/admin/guesses/pending?league=${selectedLeague}&requesterRole=admin`);
+      if (res.ok) {
+        const data = await res.json();
+        setPendingGuesses(data);
+      }
+    } catch (e) {
+      console.error('Error fetching pending guesses:', e);
+    }
+  };
+
+  // Approve guess (Admin)
+  const handleApproveGuess = async (guessId) => {
+    try {
+      const res = await fetch('/api/admin/guesses/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          guessId,
+          requesterRole: 'admin'
+        })
+      });
+      if (res.ok) {
+        showToast('Palpite aprovado com sucesso!');
+        fetchPendingGuesses();
+        fetchMatches(true);
+        fetchRanking(true);
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Erro ao aprovar palpite.', 'error');
+      }
+    } catch (e) {
+      showToast('Erro ao comunicar com o servidor.', 'error');
+    }
+  };
+
+  // Reject guess (Admin)
+  const handleRejectGuess = async (guessId) => {
+    try {
+      const res = await fetch('/api/admin/guesses/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          guessId,
+          requesterRole: 'admin'
+        })
+      });
+      if (res.ok) {
+        showToast('Palpite rejeitado com sucesso!');
+        fetchPendingGuesses();
+        fetchMatches(true);
+        fetchRanking(true);
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Erro ao rejeitar palpite.', 'error');
+      }
+    } catch (e) {
+      showToast('Erro ao comunicar com o servidor.', 'error');
     }
   };
 
@@ -1591,7 +2182,7 @@ function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px' }}>
                 <span>{formatDate(match.date).split(' ')[0]}</span>
                 <span className={`indicator-badge ${match.status}`} style={{ fontSize: '8px' }}>
-                  {isFinished ? 'Fim' : isLive ? (match.matchClock || 'Ao Vivo') : 'Aberto'}
+                  <MatchClock match={match} customFinishedText="Fim" customPendingText="Aberto" />
                 </span>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -1652,7 +2243,7 @@ function App() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px' }}>
                     <span>{formatDate(thirdPlaceMatch.date).split(' ')[0]}</span>
                     <span className={`indicator-badge ${thirdPlaceMatch.status}`} style={{ fontSize: '8px' }}>
-                      {thirdPlaceMatch.status === 'finished' ? 'Fim' : thirdPlaceMatch.status === 'live' ? (thirdPlaceMatch.matchClock || 'Ao Vivo') : 'Aberto'}
+                      <MatchClock match={thirdPlaceMatch} customFinishedText="Fim" customPendingText="Aberto" />
                     </span>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -1809,6 +2400,14 @@ function App() {
               )}
 
               <button 
+                onClick={() => setIsSettingsModalOpen(true)}
+                className="btn btn-secondary btn-icon-only" 
+                title="Configurações de Alertas"
+              >
+                <Sliders size={16} />
+              </button>
+
+              <button 
                 onClick={() => setIsRulesModalOpen(true)}
                 className="btn btn-secondary btn-icon-only" 
                 title="Regras de Pontuação"
@@ -1900,83 +2499,36 @@ function App() {
             </div>
 
             {/* Filter Section */}
-            <div className="filters-dropdown-row">
-              {/* Dropdown 1: Palpites */}
-              <div className="custom-dropdown">
-                <button 
-                  className="dropdown-trigger" 
-                  onClick={() => {
-                    setGuessDropdownOpen(!guessDropdownOpen);
-                    setTimeDropdownOpen(false);
-                  }}
+            <div className="filters-segmented-row">
+              <div className="filters-segmented-container">
+                <button
+                  className={`filter-segment-btn ${guessFilter === 'all' ? 'active' : ''}`}
+                  onClick={() => setGuessFilter('all')}
                 >
-                  <span>Palpites: <strong>{getGuessFilterLabel(guessFilter)}</strong></span>
-                  <ChevronDown size={16} className={`dropdown-arrow ${guessDropdownOpen ? 'open' : ''}`} />
+                  <span className="filter-icon">🥅</span>
+                  <span className="filter-label-text">Todos</span>
+                  <span className="filter-count-badge">{matches.length}</span>
                 </button>
-                {guessDropdownOpen && (
-                  <div className="dropdown-menu glass-panel">
-                    <button 
-                      className={`dropdown-item ${guessFilter === 'all' ? 'active' : ''}`}
-                      onClick={() => { setGuessFilter('all'); setGuessDropdownOpen(false); }}
-                    >
-                      Todos os Jogos
-                    </button>
-                    <button 
-                      className={`dropdown-item ${guessFilter === 'guessed' ? 'active' : ''}`}
-                      onClick={() => { setGuessFilter('guessed'); setGuessDropdownOpen(false); }}
-                    >
-                      ✍️ Jogos Palpitados
-                    </button>
-                    <button 
-                      className={`dropdown-item ${guessFilter === 'missing' ? 'active' : ''}`}
-                      onClick={() => { setGuessFilter('missing'); setGuessDropdownOpen(false); }}
-                    >
-                      ⏳ Jogos Sem Palpite
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Dropdown 2: Período */}
-              <div className="custom-dropdown">
-                <button 
-                  className="dropdown-trigger" 
-                  onClick={() => {
-                    setTimeDropdownOpen(!timeDropdownOpen);
-                    setGuessDropdownOpen(false);
-                  }}
+                <button
+                  className={`filter-segment-btn ${guessFilter === 'guessed' ? 'active' : ''}`}
+                  onClick={() => setGuessFilter('guessed')}
                 >
-                  <span>Período: <strong>{getTimeFilterLabel(timeFilter)}</strong></span>
-                  <ChevronDown size={16} className={`dropdown-arrow ${timeDropdownOpen ? 'open' : ''}`} />
+                  <span className="filter-icon">✍️</span>
+                  <span className="filter-label-text">Palpitados</span>
+                  <span className="filter-count-badge success">
+                    {matches.filter(m => m.userGuess !== null && m.userGuess !== undefined).length}
+                  </span>
                 </button>
-                {timeDropdownOpen && (
-                  <div className="dropdown-menu glass-panel">
-                    <button 
-                      className={`dropdown-item ${timeFilter === 'all' ? 'active' : ''}`}
-                      onClick={() => { setTimeFilter('all'); setTimeDropdownOpen(false); }}
-                    >
-                      Todos os Períodos
-                    </button>
-                    <button 
-                      className={`dropdown-item ${timeFilter === 'near' ? 'active' : ''}`}
-                      onClick={() => { setTimeFilter('near'); setTimeDropdownOpen(false); }}
-                    >
-                      ⚡ Jogos Próximos
-                    </button>
-                    <button 
-                      className={`dropdown-item ${timeFilter === 'finished' ? 'active' : ''}`}
-                      onClick={() => { setTimeFilter('finished'); setTimeDropdownOpen(false); }}
-                    >
-                      🏁 Jogos Encerrados
-                    </button>
-                    <button 
-                      className={`dropdown-item ${timeFilter === 'future' ? 'active' : ''}`}
-                      onClick={() => { setTimeFilter('future'); setTimeDropdownOpen(false); }}
-                    >
-                      🔮 Jogos Futuros
-                    </button>
-                  </div>
-                )}
+                <button
+                  className={`filter-segment-btn ${guessFilter === 'missing' ? 'active' : ''}`}
+                  onClick={() => setGuessFilter('missing')}
+                >
+                  <span className="filter-icon">⏳</span>
+                  <span className="filter-label-text">Pendentes</span>
+                  <span className="filter-count-badge warning">
+                    {matches.filter(m => !m.userGuess).length}
+                  </span>
+                </button>
               </div>
             </div>
 
@@ -1992,38 +2544,57 @@ function App() {
                 <p>O organizador do bolão ainda não cadastrou nenhuma partida.</p>
               </div>
             ) : (() => {
-              // Calculate filtered and sorted matches inside a self-invoking function
-              const sorted = [...matches].sort((a, b) => new Date(a.date) - new Date(b.date));
-              const now = new Date();
-              const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-              const sevenDaysFromNow = new Date(todayStart.getTime() + 7 * 24 * 60 * 60 * 1000);
-              
-              // Apply time filter
-              let filtered = sorted;
-              if (timeFilter === 'near') {
-                filtered = sorted.filter(match => {
-                  const matchDate = new Date(match.date);
-                  return match.status === 'live' || (
-                    match.status !== 'finished' && 
-                    matchDate <= sevenDaysFromNow
-                  );
-                });
-              } else if (timeFilter === 'finished') {
-                filtered = sorted.filter(match => match.status === 'finished');
-              } else if (timeFilter === 'future') {
-                filtered = sorted.filter(match => {
-                  const matchDate = new Date(match.date);
-                  return match.status !== 'finished' && 
-                         match.status !== 'live' && 
-                         matchDate > sevenDaysFromNow;
-                });
-              }
+              // Helpers for grouping and dates
+              const getSortableDateKey = (dateStr) => {
+                const d = new Date(dateStr);
+                const year = d.getFullYear();
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+              };
 
-              // Apply guess filter in combination
+              const getTodaySortableKey = () => {
+                const d = new Date();
+                const year = d.getFullYear();
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+              };
+
+              const formatHeaderDate = (dateKey) => {
+                const parts = dateKey.split('-');
+                const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+                const weekday = d.toLocaleDateString('pt-BR', { weekday: 'long' });
+                const formattedDate = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+                const capitalizedWeekday = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+                return `${capitalizedWeekday}, ${formattedDate}`;
+              };
+
+              const isSectionOpen = (key) => {
+                if (sectionsOpen[key] !== undefined) {
+                  return sectionsOpen[key];
+                }
+                if (key === 'live' || key === 'soon') {
+                  return true;
+                }
+                return false;
+              };
+
+              const toggleSection = (key) => {
+                setSectionsOpen(prev => ({
+                  ...prev,
+                  [key]: !prev[key]
+                }));
+              };
+
+              const sorted = [...matches].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+              // Apply guess filter
+              let filtered = sorted;
               if (guessFilter === 'guessed') {
-                filtered = filtered.filter(match => match.userGuess !== null && match.userGuess !== undefined);
+                filtered = sorted.filter(match => match.userGuess !== null && match.userGuess !== undefined);
               } else if (guessFilter === 'missing') {
-                filtered = filtered.filter(match => !match.userGuess);
+                filtered = sorted.filter(match => !match.userGuess);
               }
 
               if (filtered.length === 0) {
@@ -2038,220 +2609,301 @@ function App() {
                 );
               }
 
-              return (
-                <div className="matches-grid">
-                  {filtered.map(match => {
-                    const hasStarted = new Date(match.date) < new Date() || match.status === 'live';
-                    const isFinished = match.status === 'finished';
-                    
-                    return (
-                      <div 
-                        key={match.id} 
-                        className="match-card glass-panel" 
-                        style={{ cursor: 'pointer' }}
-                        onClick={() => setActiveMatchDetails(match)}
-                      >
-                        <div className="match-header">
-                          <span>{formatDate(match.date)}</span>
-                          <div style={{ display: 'flex', gap: '6px' }}>
-                            {match.manuallyUpdated && (
-                              <span className="match-badge finished" style={{ background: '#f59e0b', color: '#fff' }}>
-                                Manual
-                              </span>
-                            )}
-                            <span className={`match-badge ${match.status}`}>
-                              {isFinished ? 'Encerrado' : match.status === 'live' ? `• ${match.matchClock || 'AO VIVO'}` : 'Aberto'}
-                            </span>
-                          </div>
-                        </div>
+              const todaySortableKey = getTodaySortableKey();
+              const liveMatches = [];
+              const soonMatches = [];
+              const otherDaysMap = {}; // 'YYYY-MM-DD' -> Array of matches
+              const finishedMap = {}; // 'YYYY-MM-DD' -> Array of matches
 
-                        <div className="match-teams">
-                          <div className="team">
-                            {renderTeamFlag(match.teamA, "team-flag", match.teamALogo)}
-                            <span className="team-name" title={match.teamA}>{match.teamA}</span>
-                          </div>
+              filtered.forEach(match => {
+                const sortableKey = getSortableDateKey(match.date);
+                
+                if (match.status === 'live') {
+                  liveMatches.push(match);
+                } else if (match.status === 'finished') {
+                  if (!finishedMap[sortableKey]) {
+                    finishedMap[sortableKey] = [];
+                  }
+                  finishedMap[sortableKey].push(match);
+                } else {
+                  if (sortableKey === todaySortableKey) {
+                    soonMatches.push(match);
+                  } else {
+                    if (!otherDaysMap[sortableKey]) {
+                      otherDaysMap[sortableKey] = [];
+                    }
+                    otherDaysMap[sortableKey].push(match);
+                  }
+                }
+              });
 
-                          <div className="match-vs-score">
-                            <span className="vs-text">VS</span>
-                            {isFinished || match.status === 'live' ? (
-                              <div className="score-display">
-                                <span className="score-number" style={match.status === 'live' ? { borderColor: 'rgba(239, 68, 68, 0.4)', color: '#ef4444' } : {}}>{match.scoreA}</span>
-                                <span className="score-dash">-</span>
-                                <span className="score-number" style={match.status === 'live' ? { borderColor: 'rgba(239, 68, 68, 0.4)', color: '#ef4444' } : {}}>{match.scoreB}</span>
-                              </div>
-                            ) : (
-                              <div className="score-display" style={{ opacity: 0.5 }}>
-                                <span className="score-number">?</span>
-                                <span className="score-dash">-</span>
-                                <span className="score-number">?</span>
-                              </div>
-                            )}
-                          </div>
+              const sortedLive = liveMatches;
+              const sortedSoon = soonMatches;
+              const sortedOtherDaysKeys = Object.keys(otherDaysMap).sort();
+              const sortedFinishedKeys = Object.keys(finishedMap).sort().reverse();
 
-                          <div className="team">
-                            {renderTeamFlag(match.teamB, "team-flag", match.teamBLogo)}
-                            <span className="team-name" title={match.teamB}>{match.teamB}</span>
-                          </div>
-                        </div>
+              const renderMatchCard = (match) => {
+                const hasStarted = new Date(match.date) < new Date() || match.status === 'live';
+                const isFinished = match.status === 'finished';
+                
+                const colorsA = getTeamColors(match.teamA);
+                const colorsB = getTeamColors(match.teamB);
+                
+                const cardStyle = {
+                  '--team-a-bg': colorsA.bg,
+                  '--team-a-text': colorsA.text,
+                  '--team-b-bg': colorsB.bg,
+                  '--team-b-text': colorsB.text,
+                  'cursor': 'pointer'
+                };
 
-                        <div className="match-footer">
-                          {/* Current User's Guess info */}
+                const otherGuesses = match.otherGuesses || [];
+                const hasGuesses = otherGuesses.length > 0;
+                let marqueeItems = [];
+                if (hasGuesses) {
+                  marqueeItems = [...otherGuesses, ...otherGuesses, ...otherGuesses, ...otherGuesses];
+                }
+                
+                return (
+                  <div 
+                    key={match.id} 
+                    className="match-card glass-panel" 
+                    style={cardStyle}
+                    onClick={() => setActiveMatchDetails(match)}
+                  >
+                    {/* Header bar (glass panel) */}
+                    <div className="match-card-header">
+                      <span className="match-card-header-date">
+                        📅 {formatDate(match.date)}
+                        {match.stadiumName && ` • 🏟️ ${match.stadiumName}`}
+                      </span>
+                      <div className="match-card-header-right">
+                        <span className={`match-badge ${match.status}`}>
+                          <MatchClock match={match} customFinishedText="Encerrado" customPendingText="Aberto" prefix="• " />
+                        </span>
+                        <ExternalLink size={14} className="match-card-expand-icon" />
+                      </div>
+                    </div>
+
+                    {/* Main Scoreboard Body */}
+                    <div className="match-card-body">
+                      <div className="team-side team-a">
+                        {renderTeamFlag(match.teamA, "team-flag-split", match.teamALogo)}
+                        <span className="team-name-split" title={match.teamA}>{match.teamA}</span>
+                      </div>
+                      
+                      <div className="scoreboard-center">
+                        {isFinished || match.status === 'live' ? (
+                          <div className="score-display-split">
+                            <span className="score-num-split" style={match.status === 'live' ? { color: '#ef4444' } : {}}>{match.scoreA}</span>
+                            <span className="score-divider-split">-</span>
+                            <span className="score-num-split" style={match.status === 'live' ? { color: '#ef4444' } : {}}>{match.scoreB}</span>
+                          </div>
+                        ) : (
+                          <div className="score-display-split vs">
+                            <span>VS</span>
+                          </div>
+                        )}
+
+                        {/* User Guess shown centered below the score */}
+                        <div className="match-card-center-guess">
                           {match.userGuess ? (
-                            <div className="user-guess-box">
-                              <span className="guess-label">Seu palpite:</span>
+                            <div className="user-guess-box-row">
+                              <span className="guess-label">Palpite:</span>
                               <span className="guess-value">{match.userGuess.scoreA} x {match.userGuess.scoreB}</span>
-                              {isFinished && (
-                                <span className="guess-points">
-                                  +{match.userGuess.points} pts
+                              {match.userGuess.status === 'pending' && (
+                                <span className="indicator-badge pending" style={{ fontSize: '8px', padding: '2px 6px', marginLeft: '4px' }}>⏳ Pendente</span>
+                              )}
+                              {match.userGuess.status === 'rejected' && (
+                                <span className="indicator-badge missed" style={{ fontSize: '8px', padding: '2px 6px', marginLeft: '4px' }}>❌ Rejeitado</span>
+                              )}
+                              {isFinished && (!match.userGuess.status || match.userGuess.status === 'approved') && (
+                                <span className="guess-points">+{match.userGuess.points} pts</span>
+                              )}
+                              {match.status === 'live' && (!match.userGuess.status || match.userGuess.status === 'approved') && (
+                                <span className="guess-points live-points" title="Pontos parciais neste momento">
+                                  +{calculateLivePoints(match.userGuess.scoreA, match.userGuess.scoreB, match.scoreA, match.scoreB)} pts
                                 </span>
                               )}
                             </div>
                           ) : (
-                            !hasStarted && (
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setGuessModal({ isOpen: true, match });
-                                  setGuessForm({ scoreA: '', scoreB: '' });
-                                }}
-                                className="btn btn-primary"
-                                style={{ width: '100%' }}
-                              >
-                                Dar Palpite
-                              </button>
-                            )
-                          )}
-
-                          {/* Allow admin to set/edit result */}
-                          {user.role === 'admin' && viewMode === 'admin' && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', marginTop: '8px' }}>
-                              <button 
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setResultModal({ isOpen: true, match });
-                                    setResultForm({ 
-                                      scoreA: match.scoreA !== null && match.scoreA !== undefined ? match.scoreA.toString() : '', 
-                                      scoreB: match.scoreB !== null && match.scoreB !== undefined ? match.scoreB.toString() : '' 
-                                    });
-                                }}
-                                className="btn btn-secondary"
-                                style={{ width: '100%' }}
-                              >
-                                {isFinished ? 'Alterar Placar Oficial' : 'Inserir Placar Oficial'}
-                              </button>
-
-                              {match.manuallyUpdated && (
-                                <button 
-                                  onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleUnlockSync(match.id);
-                                  }}
-                                  className="btn"
-                                  style={{ 
-                                    width: '100%', 
-                                    fontSize: '11px', 
-                                    padding: '6px 12px', 
-                                    background: 'rgba(239, 68, 68, 0.1)', 
-                                    color: '#ef4444', 
-                                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                                    borderRadius: 'var(--border-radius-sm, 4px)',
-                                    cursor: 'pointer'
-                                  }}
-                                >
-                                  Reativar Sincronização Automática
-                                </button>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Edit guess if still open */}
-                          {match.userGuess && !hasStarted && (
-                            <button 
-                              onClick={(e) => {
-                                  e.stopPropagation();
-                                  setGuessModal({ isOpen: true, match });
-                                  setGuessForm({ scoreA: match.userGuess.scoreA.toString(), scoreB: match.userGuess.scoreB.toString() });
-                              }}
-                              className="btn btn-secondary"
-                              style={{ width: '100%' }}
-                            >
-                              Alterar Palpite
-                            </button>
-                          )}
-
-                          {/* Show indicator if match started and guess is missing */}
-                          {!match.userGuess && hasStarted && (
-                            <div className="user-guess-box" style={{ borderColor: 'var(--color-danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
-                              <span className="guess-label" style={{ color: 'var(--color-danger)' }}>Você não palpitou a tempo</span>
-                            </div>
-                          )}
-
-                          {/* Allow admin to place guess on behalf of others */}
-                          {user.role === 'admin' && viewMode === 'admin' && (
-                            <button 
-                              onClick={(e) => {
-                                  e.stopPropagation();
-                                  setAdminGuessModal({ isOpen: true, match });
-                                  setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
-                              }}
-                              className="btn btn-secondary"
-                              style={{ width: '100%', marginTop: '4px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
-                            >
-                              Palpitar por Outro
-                            </button>
-                          )}
-
-                          {/* Expandable list of guesses for other players (only if match started/locked) */}
-                          {hasStarted && match.otherGuesses && match.otherGuesses.length > 0 && (
-                            <div className="guesses-collapse" onClick={(e) => e.stopPropagation()}>
-                              <button 
-                                className="guesses-collapse-btn" 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleGuessesExpand(match.id);
-                                }}
-                              >
-                                {expandedGuesses[match.id] ? (
-                                  <>Ocultar palpites da galera <ChevronUp size={12} /></>
-                                ) : (
-                                  <>Ver palpites da galera ({match.otherGuesses.length}) <ChevronDown size={12} /></>
-                                )}
-                              </button>
-                              
-                              {expandedGuesses[match.id] && (
-                                <div className="guesses-collapse-list">
-                                  {match.otherGuesses.map((g, idx) => (
-                                    <div key={idx} className="guess-list-item">
-                                      <span className="guess-list-name">{g.userName}</span>
-                                      <div>
-                                        <span className="guess-list-score">{g.scoreA} x {g.scoreB}</span>
-                                        {isFinished && (
-                                          <span className="guess-list-points"> (+{g.points} pts)</span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        
-                        {/* Indicador de palpite no canto inferior direito */}
-                        <div className="card-guess-indicator">
-                          {match.userGuess ? (
-                            <span className="indicator-badge guessed" title="Você já deu seu palpite!">✓ Palpitado</span>
-                          ) : (
-                            hasStarted ? (
-                              <span className="indicator-badge missed" title="Você não palpitou a tempo">❌ Sem palpite</span>
+                            !hasStarted ? (
+                              <span className="indicator-badge pending">⏳ Sem Palpite</span>
                             ) : (
-                              <span className="indicator-badge pending" title="Você ainda não palpitou!">⏳ Sem palpite</span>
+                              <span className="indicator-badge missed">❌ Sem Palpite</span>
                             )
                           )}
                         </div>
                       </div>
+                      
+                      <div className="team-side team-b">
+                        <span className="team-name-split" title={match.teamB}>{match.teamB}</span>
+                        {renderTeamFlag(match.teamB, "team-flag-split", match.teamBLogo)}
+                      </div>
+                    </div>
+
+                    {/* Footer marquee panel */}
+                    {hasGuesses ? (
+                      <div className="match-card-marquee">
+                        <div className="marquee-content">
+                          {marqueeItems.map((g, idx) => (
+                            <span key={idx} className="marquee-item">
+                              👤 <strong>{g.userName}</strong>: {g.scoreA}x{g.scoreB}
+                              {isFinished && <span className="marquee-points"> (+{g.points} pts)</span>}
+                              {match.status === 'live' && (
+                                <span className="marquee-points live-points"> (+{calculateLivePoints(g.scoreA, g.scoreB, match.scoreA, match.scoreB)} pts)</span>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="match-card-marquee-empty">
+                        <span>👥 Nenhum palpite dos amigos ainda. Seja o primeiro!</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              };
+
+              return (
+                <div className="accordions-container">
+                  {/* 1. AO VIVO */}
+                  {sortedLive.length > 0 && (
+                    <div className="accordion-section">
+                      <button 
+                        className="accordion-header live"
+                        onClick={() => toggleSection('live')}
+                      >
+                        <div className="accordion-header-left">
+                          <span className="live-indicator-dot"></span>
+                          <span>Ao Vivo</span>
+                          <span className="accordion-badge">
+                            {sortedLive.length} {sortedLive.length === 1 ? 'jogo' : 'jogos'}
+                          </span>
+                        </div>
+                        <ChevronDown size={18} className={`accordion-arrow ${isSectionOpen('live') ? 'open' : ''}`} />
+                      </button>
+                      
+                      {isSectionOpen('live') && (
+                        <div className="accordion-content">
+                          <div className="matches-grid">
+                            {sortedLive.map(match => renderMatchCard(match))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 2. DAQUI A POUQUINHO */}
+                  {sortedSoon.length > 0 && (
+                    <div className="accordion-section">
+                      <button 
+                        className="accordion-header soon"
+                        onClick={() => toggleSection('soon')}
+                      >
+                        <div className="accordion-header-left">
+                          <span>⚡</span>
+                          <span>Daqui a pouquinho</span>
+                          <span className="accordion-badge">
+                            {sortedSoon.length} {sortedSoon.length === 1 ? 'jogo' : 'jogos'}
+                          </span>
+                        </div>
+                        <ChevronDown size={18} className={`accordion-arrow ${isSectionOpen('soon') ? 'open' : ''}`} />
+                      </button>
+                      
+                      {isSectionOpen('soon') && (
+                        <div className="accordion-content">
+                          <div className="matches-grid">
+                            {sortedSoon.map(match => renderMatchCard(match))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 3. OUTROS DIAS (Ascending future dates) */}
+                  {sortedOtherDaysKeys.map(dateKey => {
+                    const sectionKey = `future-${dateKey}`;
+                    const dayMatches = otherDaysMap[dateKey];
+                    return (
+                      <div key={dateKey} className="accordion-section">
+                        <button 
+                          className="accordion-header future"
+                          onClick={() => toggleSection(sectionKey)}
+                        >
+                          <div className="accordion-header-left">
+                            <span>📅</span>
+                            <span>{formatHeaderDate(dateKey)}</span>
+                            <span className="accordion-badge">
+                              {dayMatches.length} {dayMatches.length === 1 ? 'jogo' : 'jogos'}
+                            </span>
+                          </div>
+                          <ChevronDown size={18} className={`accordion-arrow ${isSectionOpen(sectionKey) ? 'open' : ''}`} />
+                        </button>
+                        
+                        {isSectionOpen(sectionKey) && (
+                          <div className="accordion-content">
+                            <div className="matches-grid">
+                              {dayMatches.map(match => renderMatchCard(match))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
+
+                  {/* 4. ENCERRADOS (Descending past dates) */}
+                  {sortedFinishedKeys.length > 0 && (
+                    <div className="accordion-section">
+                      <button 
+                        className="accordion-header finished"
+                        onClick={() => toggleSection('finished')}
+                      >
+                        <div className="accordion-header-left">
+                          <span>🏁</span>
+                          <span>Jogos Encerrados</span>
+                          <span className="accordion-badge">
+                            {sortedFinishedKeys.reduce((acc, key) => acc + finishedMap[key].length, 0)} {sortedFinishedKeys.reduce((acc, key) => acc + finishedMap[key].length, 0) === 1 ? 'jogo' : 'jogos'}
+                          </span>
+                        </div>
+                        <ChevronDown size={18} className={`accordion-arrow ${isSectionOpen('finished') ? 'open' : ''}`} />
+                      </button>
+                      
+                      {isSectionOpen('finished') && (
+                        <div className="sub-accordion-container">
+                          {sortedFinishedKeys.map(dateKey => {
+                            const subSectionKey = `past-${dateKey}`;
+                            const pastMatches = finishedMap[dateKey];
+                            return (
+                              <div key={dateKey} className="sub-accordion-section">
+                                <button 
+                                  className={`sub-accordion-header ${isSectionOpen(subSectionKey) ? 'open' : ''}`}
+                                  onClick={() => toggleSection(subSectionKey)}
+                                >
+                                  <span>{formatHeaderDate(dateKey)}</span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span className="accordion-badge">
+                                      {pastMatches.length} {pastMatches.length === 1 ? 'jogo' : 'jogos'}
+                                    </span>
+                                    <ChevronDown size={14} className={`accordion-arrow ${isSectionOpen(subSectionKey) ? 'open' : ''}`} />
+                                  </div>
+                                </button>
+                                
+                                {isSectionOpen(subSectionKey) && (
+                                  <div className="sub-accordion-content">
+                                    <div className="matches-grid">
+                                      {pastMatches.map(match => renderMatchCard(match))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -2512,6 +3164,78 @@ function App() {
         {/* Tab 4: Admin Panel (Only for admins) */}
         {activeTab === 'admin' && user.role === 'admin' && viewMode === 'admin' && (
           <div style={{ maxWidth: '600px', margin: '0 auto' }}>
+            {/* CARD: Pending Guesses Approval */}
+            <div className="admin-config-card glass-panel" style={{ marginBottom: '24px' }}>
+              <h3 className="admin-config-title">Aprovação de Palpites em Andamento</h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '16px' }}>
+                Jogadores palpitando com bola rolando. Aprove ou rejeite os palpites abaixo.
+              </p>
+              
+              {pendingGuesses.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)', fontSize: '14px' }}>
+                  Nenhum palpite aguardando aprovação para este campeonato no momento.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {pendingGuesses.map(g => (
+                    <div 
+                      key={g.id} 
+                      style={{ 
+                        border: '1px solid var(--border-color)', 
+                        borderRadius: '8px', 
+                        padding: '16px', 
+                        background: 'rgba(255, 255, 255, 0.02)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '10px'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                        <div>
+                          <strong style={{ color: 'var(--color-primary)' }}>{g.userName}</strong>
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                            {new Date(g.updatedAt || g.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <div className="indicator-badge pending">Aguardando Avaliação</div>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px' }}>
+                        <div style={{ fontSize: '13px' }}>
+                          <strong>{g.teamA}</strong> vs <strong>{g.teamB}</strong>
+                        </div>
+                        <div style={{ fontSize: '14px', fontWeight: '800', color: 'var(--text-primary)' }}>
+                          Palpite: {g.scoreA} x {g.scoreB}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        <div>⏱️ Minuto do palpite: <strong>{g.guessClock || 'Não disponível'}</strong></div>
+                        <div>⚽ Placar no momento: <strong>{g.matchScoreAtGuess || '0-0'}</strong></div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                        <button 
+                          onClick={() => handleApproveGuess(g.id)} 
+                          className="btn btn-primary"
+                          style={{ flex: 1, padding: '8px 12px', fontSize: '12px', background: '#10b981', borderColor: '#10b981' }}
+                        >
+                          Aprovar
+                        </button>
+                        <button 
+                          onClick={() => handleRejectGuess(g.id)} 
+                          className="btn btn-danger"
+                          style={{ flex: 1, padding: '8px 12px', fontSize: '12px' }}
+                        >
+                          Rejeitar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="admin-config-card glass-panel">
               <h3 className="admin-config-title">Painel de Administração do Bolão</h3>
               <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '16px' }}>
@@ -2964,72 +3688,84 @@ function App() {
 
           <div className="fullscreen-content-container">
             {/* Permanent Match Header Card */}
-            <div className="match-detail-header-card glass-panel">
-              <div className="match-time-status">
-                <span className="time-text">
-                  📅 {formatDate(activeMatchDetails.date)} 
-                  {activeMatchDetails.stadiumName && ` • 🏟️ ${activeMatchDetails.stadiumName}`}
-                </span>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  {activeMatchDetails.manuallyUpdated && (
-                    <span className="match-badge finished" style={{ background: '#f59e0b', color: '#fff' }}>
-                      Manual
+            {(() => {
+              const colorsA = getTeamColors(activeMatchDetails.teamA);
+              const colorsB = getTeamColors(activeMatchDetails.teamB);
+              const headerCardStyle = {
+                '--team-a-bg': colorsA.bg,
+                '--team-a-text': colorsA.text,
+                '--team-b-bg': colorsB.bg,
+                '--team-b-text': colorsB.text,
+              };
+              return (
+                <div className="match-detail-header-card glass-panel" style={headerCardStyle}>
+                  <div className="match-time-status">
+                    <span className="time-text">
+                      📅 {formatDate(activeMatchDetails.date)} 
+                      {activeMatchDetails.stadiumName && ` • 🏟️ ${activeMatchDetails.stadiumName}`}
                     </span>
-                  )}
-                  <span className={`match-badge ${activeMatchDetails.status}`}>
-                    {activeMatchDetails.status === 'finished' ? 'Encerrado' : activeMatchDetails.status === 'live' ? `• ${activeMatchDetails.matchClock || 'AO VIVO'}` : 'Aberto'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="details-scoreboard">
-                <div className="team-column">
-                  {renderTeamFlag(activeMatchDetails.teamA, "details-team-flag", activeMatchDetails.teamALogo)}
-                  <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamA}</span>
-                </div>
-
-                <div className="details-score-box">
-                  {activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live' ? (
-                    <div className="score-numbers">
-                      <span className="score-num">{activeMatchDetails.scoreA}</span>
-                      <span className="score-divider">-</span>
-                      <span className="score-num">{activeMatchDetails.scoreB}</span>
-                    </div>
-                  ) : (
-                    <span className="score-vs">VS</span>
-                  )}
-                </div>
-
-                <div className="team-column">
-                  {renderTeamFlag(activeMatchDetails.teamB, "details-team-flag", activeMatchDetails.teamBLogo)}
-                  <span className="details-team-name" style={{ marginTop: '8px' }}>{activeMatchDetails.teamB}</span>
-                </div>
-              </div>
-
-              {(activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live') && (() => {
-                const homeScorersList = matchStats ? getScorersFromStats(matchStats, true) : parseScorers(activeMatchDetails.home_scorers);
-                const awayScorersList = matchStats ? getScorersFromStats(matchStats, false) : parseScorers(activeMatchDetails.away_scorers);
-                return (
-                  <div className="scorers-section">
-                    <div className="scorers-grid">
-                      <div className="scorers-list home-scorers">
-                        {homeScorersList.map((scorer, i) => (
-                          <div key={i} className="scorer-item">⚽ {scorer}</div>
-                        ))}
-                        {homeScorersList.length === 0 && <div className="no-scorers">-</div>}
-                      </div>
-                      <div className="scorers-divider"></div>
-                      <div className="scorers-list away-scorers">
-                        {awayScorersList.map((scorer, i) => (
-                          <div key={i} className="scorer-item">{scorer} ⚽</div>
-                        ))}
-                        {awayScorersList.length === 0 && <div className="no-scorers">-</div>}
-                      </div>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      {activeMatchDetails.manuallyUpdated && (
+                        <span className="match-badge finished" style={{ background: '#f59e0b', color: '#fff' }}>
+                          Manual
+                        </span>
+                      )}
+                      <span className={`match-badge ${activeMatchDetails.status}`}>
+                        <MatchClock match={activeMatchDetails} customFinishedText="Encerrado" customPendingText="Aberto" prefix="• " />
+                      </span>
                     </div>
                   </div>
-                );
-              })()}
-            </div>
+
+                  <div className="details-scoreboard">
+                    <div className="team-column team-side team-a">
+                      {renderTeamFlag(activeMatchDetails.teamA, "details-team-flag", activeMatchDetails.teamALogo)}
+                      <span className="details-team-name team-name-split" style={{ marginTop: '8px' }}>{activeMatchDetails.teamA}</span>
+                    </div>
+
+                    <div className="details-score-box scoreboard-center">
+                      {activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live' ? (
+                        <div className="score-numbers score-display-split">
+                          <span className="score-num score-num-split">{activeMatchDetails.scoreA}</span>
+                          <span className="score-divider score-divider-split">-</span>
+                          <span className="score-num score-num-split">{activeMatchDetails.scoreB}</span>
+                        </div>
+                      ) : (
+                        <div className="score-vs score-display-split vs">VS</div>
+                      )}
+                    </div>
+
+                    <div className="team-column team-side team-b">
+                      {renderTeamFlag(activeMatchDetails.teamB, "details-team-flag", activeMatchDetails.teamBLogo)}
+                      <span className="details-team-name team-name-split" style={{ marginTop: '8px' }}>{activeMatchDetails.teamB}</span>
+                    </div>
+                  </div>
+
+                  {(activeMatchDetails.status === 'finished' || activeMatchDetails.status === 'live') && (() => {
+                    const homeScorersList = matchStats ? getScorersFromStats(matchStats, true) : parseScorers(activeMatchDetails.home_scorers);
+                    const awayScorersList = matchStats ? getScorersFromStats(matchStats, false) : parseScorers(activeMatchDetails.away_scorers);
+                    return (
+                      <div className="scorers-section">
+                        <div className="scorers-grid">
+                          <div className="scorers-list home-scorers">
+                            {homeScorersList.map((scorer, i) => (
+                              <div key={i} className="scorer-item">⚽ {scorer}</div>
+                            ))}
+                            {homeScorersList.length === 0 && <div className="no-scorers">-</div>}
+                          </div>
+                          <div className="scorers-divider"></div>
+                          <div className="scorers-list away-scorers">
+                            {awayScorersList.map((scorer, i) => (
+                              <div key={i} className="scorer-item">{scorer} ⚽</div>
+                            ))}
+                            {awayScorersList.length === 0 && <div className="no-scorers">-</div>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              );
+            })()}
 
             {/* Tabs Navigation */}
             <div className="details-tabs-container">
@@ -3058,15 +3794,28 @@ function App() {
                   {activeMatchDetails.userGuess ? (
                     <div className="guess-info-alert">
                       <span className="alert-title">Seu palpite registrado:</span>
-                      <div className="guess-score-pill">
-                        {activeMatchDetails.userGuess.scoreA} x {activeMatchDetails.userGuess.scoreB}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
+                        <div className="guess-score-pill">
+                          {activeMatchDetails.userGuess.scoreA} x {activeMatchDetails.userGuess.scoreB}
+                        </div>
+                        {activeMatchDetails.userGuess.status === 'pending' && (
+                          <span className="indicator-badge pending">⏳ Pendente</span>
+                        )}
+                        {activeMatchDetails.userGuess.status === 'rejected' && (
+                          <span className="indicator-badge missed">❌ Rejeitado</span>
+                        )}
                       </div>
-                      {activeMatchDetails.status === 'finished' && (
+                      {activeMatchDetails.status === 'finished' && (!activeMatchDetails.userGuess.status || activeMatchDetails.userGuess.status === 'approved') && (
                         <div className="guess-points-earned">
                           Pontos ganhos: <strong style={{ color: 'var(--color-primary)' }}>+{activeMatchDetails.userGuess.points} pts</strong>
                         </div>
                       )}
-                      {activeMatchDetails.status === 'pending' && (
+                      {activeMatchDetails.status === 'live' && (!activeMatchDetails.userGuess.status || activeMatchDetails.userGuess.status === 'approved') && (
+                        <div className="guess-points-earned live-points-container">
+                          Ganhando no momento: <strong style={{ color: '#10b981' }}>+{calculateLivePoints(activeMatchDetails.userGuess.scoreA, activeMatchDetails.userGuess.scoreB, activeMatchDetails.scoreA, activeMatchDetails.scoreB)} pts</strong>
+                        </div>
+                      )}
+                      {activeMatchDetails.status !== 'finished' && (
                         <button 
                           onClick={() => {
                             setGuessModal({ isOpen: true, match: activeMatchDetails });
@@ -3085,7 +3834,7 @@ function App() {
                     </div>
                   ) : (
                     <div className="no-guess-alert">
-                      {(new Date(activeMatchDetails.date) > new Date() && activeMatchDetails.status !== 'live') ? (
+                      {activeMatchDetails.status !== 'finished' ? (
                         <div>
                           <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Você ainda não deu seu palpite para este jogo!</p>
                           <button 
@@ -3106,17 +3855,54 @@ function App() {
                     </div>
                   )}
                   {user.role === 'admin' && viewMode === 'admin' && (
-                    <button 
-                      onClick={() => {
-                        setAdminGuessModal({ isOpen: true, match: activeMatchDetails });
-                        setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
-                        setActiveMatchDetails(null);
-                      }}
-                      className="btn btn-secondary"
-                      style={{ width: '100%', marginTop: '10px', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
-                    >
-                      Palpitar por Outro
-                    </button>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', marginTop: '12px' }}>
+                      <button 
+                        onClick={() => {
+                          setResultModal({ isOpen: true, match: activeMatchDetails });
+                          setResultForm({ 
+                            scoreA: activeMatchDetails.scoreA !== null && activeMatchDetails.scoreA !== undefined ? activeMatchDetails.scoreA.toString() : '', 
+                            scoreB: activeMatchDetails.scoreB !== null && activeMatchDetails.scoreB !== undefined ? activeMatchDetails.scoreB.toString() : '' 
+                          });
+                        }}
+                        className="btn btn-secondary"
+                        style={{ width: '100%' }}
+                      >
+                        {activeMatchDetails.status === 'finished' ? 'Alterar Placar Oficial' : 'Inserir Placar Oficial'}
+                      </button>
+
+                      {activeMatchDetails.manuallyUpdated && (
+                        <button 
+                          onClick={() => {
+                            handleUnlockSync(activeMatchDetails.id);
+                          }}
+                          className="btn"
+                          style={{ 
+                            width: '100%', 
+                            fontSize: '11px', 
+                            padding: '6px 12px', 
+                            background: 'rgba(239, 68, 68, 0.1)', 
+                            color: '#ef4444', 
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            borderRadius: 'var(--border-radius-sm, 4px)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Reativar Sincronização Automática
+                        </button>
+                      )}
+
+                      <button 
+                        onClick={() => {
+                          setAdminGuessModal({ isOpen: true, match: activeMatchDetails });
+                          setAdminGuessForm({ userName: '', scoreA: '', scoreB: '' });
+                          setActiveMatchDetails(null);
+                        }}
+                        className="btn btn-secondary"
+                        style={{ width: '100%', borderStyle: 'dashed', borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}
+                      >
+                        Palpitar por Outro
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -3132,6 +3918,11 @@ function App() {
                               <span className="other-guess-score">{g.scoreA} x {g.scoreB}</span>
                               {activeMatchDetails.status === 'finished' && (
                                 <span className="other-guess-points">+{g.points} pts</span>
+                              )}
+                              {activeMatchDetails.status === 'live' && (
+                                <span className="other-guess-points live-points">
+                                  +{calculateLivePoints(g.scoreA, g.scoreB, activeMatchDetails.scoreA, activeMatchDetails.scoreB)} pts
+                                </span>
                               )}
                             </div>
                           </div>
@@ -3524,6 +4315,208 @@ function App() {
                 <Info size={16} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
                 <span>Os palpites da galera só ficam visíveis para os outros participantes depois que o cronômetro do jogo começar para evitar cópias estratégicas.</span>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal (Popup) */}
+      {isSettingsModalOpen && (
+        <div className="modal-overlay" style={{ zIndex: 1000 }}>
+          <div className="modal-content glass-panel settings-modal-content" style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+            <button className="modal-close" onClick={() => setIsSettingsModalOpen(false)} aria-label="Fechar">
+              <X size={18} />
+            </button>
+            <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Sliders size={22} style={{ color: 'var(--color-primary)' }} />
+              Configurações de Alertas
+            </h3>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+              
+              {/* Native Permission Card */}
+              <div className="permission-card">
+                <span className="permission-status-text">
+                  Permissão no Navegador: 
+                  <span className={`permission-status-badge ${notificationPermissionStatus}`} style={{ marginLeft: '8px' }}>
+                    {notificationPermissionStatus === 'granted' ? 'Ativada' : notificationPermissionStatus === 'denied' ? 'Bloqueada' : 'Pendente'}
+                  </span>
+                </span>
+                {notificationPermissionStatus === 'granted' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', alignItems: 'center' }}>
+                    <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Você receberá alertas do sistema na tela do seu computador ou celular mesmo com o site fechado!
+                    </p>
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                      <button 
+                        onClick={() => subscribeToPushNotifications(false)} 
+                        className="btn btn-secondary"
+                        style={{ fontSize: '12px', padding: '6px 12px' }}
+                      >
+                        Sincronizar Dispositivo
+                      </button>
+                      <button 
+                        onClick={sendTestPushNotification} 
+                        className="btn btn-primary"
+                        style={{ fontSize: '12px', padding: '6px 12px' }}
+                      >
+                        Enviar Notificação de Teste
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {notificationPermissionStatus !== 'granted' && (
+                  <button 
+                    onClick={subscribeToPushNotifications} 
+                    className="btn btn-primary"
+                    style={{ fontSize: '13px', padding: '8px 16px' }}
+                  >
+                    Ativar Notificações neste Dispositivo
+                  </button>
+                )}
+              </div>
+
+              {/* Seção 1: Alertas das Partidas */}
+              <h4 className="settings-section-title">Alertas das Partidas</h4>
+              
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">Gols em Partidas</span>
+                  <span className="settings-desc">Receber alerta push instantâneo sempre que sair gol de qualquer jogo</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={notificationSettings.goals} 
+                    onChange={(e) => updateNotificationSettings({ ...notificationSettings, goals: e.target.checked })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">Início da Partida</span>
+                  <span className="settings-desc">Receber notificação quando a bola rolar e o status for ao vivo</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={notificationSettings.matchStarted} 
+                    onChange={(e) => updateNotificationSettings({ ...notificationSettings, matchStarted: e.target.checked })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">Fim de Jogo</span>
+                  <span className="settings-desc">Ser alertado com o resultado oficial e o recálculo dos pontos</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={notificationSettings.matchFinished} 
+                    onChange={(e) => updateNotificationSettings({ ...notificationSettings, matchFinished: e.target.checked })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              {/* Seção 2: Lembretes de Palpite */}
+              <h4 className="settings-section-title">Lembretes de Palpite</h4>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '-8px' }}>
+                Envia notificações para jogos onde você ainda não registrou nenhum palpite:
+              </p>
+
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">1 hora antes</span>
+                  <span className="settings-desc">Alerta a 60 minutos do jogo começar</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={notificationSettings.remind1h} 
+                    onChange={(e) => updateNotificationSettings({ ...notificationSettings, remind1h: e.target.checked })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">30 minutos antes</span>
+                  <span className="settings-desc">Alerta a 30 minutos do início</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={notificationSettings.remind30m} 
+                    onChange={(e) => updateNotificationSettings({ ...notificationSettings, remind30m: e.target.checked })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">15 minutos antes</span>
+                  <span className="settings-desc">Alerta a 15 minutos do início</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={notificationSettings.remind15m} 
+                    onChange={(e) => updateNotificationSettings({ ...notificationSettings, remind15m: e.target.checked })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">5 minutos antes</span>
+                  <span className="settings-desc">Alerta urgente a 5 minutos da partida</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={notificationSettings.remind5m} 
+                    onChange={(e) => updateNotificationSettings({ ...notificationSettings, remind5m: e.target.checked })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              {/* Seção 3: Preferências de Som */}
+              <h4 className="settings-section-title">Efeitos Sonoros</h4>
+              
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">Alertas Sonoros</span>
+                  <span className="settings-desc">Tocar sons de apito e chimes quando estiver navegando no site</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <button 
+                    onClick={() => playSoundEffect('goal')} 
+                    className="btn-test-sound"
+                    title="Testar som de Gol"
+                  >
+                    Testar Som
+                  </button>
+                  <label className="switch">
+                    <input 
+                      type="checkbox" 
+                      checked={notificationSettings.soundEnabled} 
+                      onChange={(e) => updateNotificationSettings({ ...notificationSettings, soundEnabled: e.target.checked })} 
+                    />
+                    <span className="slider"></span>
+                  </label>
+                </div>
+              </div>
+
             </div>
           </div>
         </div>

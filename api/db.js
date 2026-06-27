@@ -103,3 +103,53 @@ export async function runExclusive(callback) {
   return nextLock;
 }
 
+export async function getLock(key, ttlSeconds) {
+  if (kv) {
+    try {
+      const result = await kv.set(key, '1', { nx: true, ex: ttlSeconds });
+      return result === 'OK' || result === true;
+    } catch (error) {
+      console.error('Error with lock on Vercel KV:', error);
+    }
+  }
+
+  // Local fallback using runExclusive for atomicity
+  return await runExclusive(async () => {
+    try {
+      const db = await getData();
+      const now = Date.now();
+      if (db.locks && db.locks[key] && db.locks[key] > now) {
+        return false;
+      }
+      if (!db.locks) db.locks = {};
+      db.locks[key] = now + ttlSeconds * 1000;
+      await saveData(db);
+      return true;
+    } catch (error) {
+      console.error('Error with local lock:', error);
+      return false;
+    }
+  });
+}
+
+export async function releaseLock(key) {
+  if (kv) {
+    try {
+      await kv.del(key);
+      return;
+    } catch (error) {
+      console.error('Error releasing lock on Vercel KV:', error);
+    }
+  }
+  
+  try {
+    const db = await getData();
+    if (db.locks && db.locks[key]) {
+      delete db.locks[key];
+      await saveData(db);
+    }
+  } catch (error) {
+    console.error('Error releasing local lock:', error);
+  }
+}
+
