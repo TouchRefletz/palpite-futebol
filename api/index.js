@@ -130,9 +130,11 @@ async function runServerSideSyncCycle() {
     if (res) {
       totalMatchesUpdated += res.matchesUpdated || 0;
       totalMatchesCreated += res.matchesCreated || 0;
-      totalNotificationsSent += res.notificationsSent || 0;
     }
   }
+
+  const dispatchResult = await dispatchPendingNotifications();
+  totalNotificationsSent = dispatchResult.dispatched;
 
   const dbAfter = await getData();
   const pendingAfter = (dbAfter.pendingPushNotifications || []).length;
@@ -828,8 +830,6 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
       for (const item of updatedMatchesToNotify) {
         await checkAndSendPushNotificationsForMatch(item.oldMatch, item.newMatch);
       }
-      const dispatchResult = await dispatchPendingNotifications();
-      notificationsSent = dispatchResult.dispatched;
     }
 
     lastSyncTimes[league] = now;
@@ -904,7 +904,10 @@ app.get('/api/matches', async (req, res) => {
   try {
     // Sync em background com waitUntil para o push completar antes do serverless encerrar.
     waitUntil(
-      syncWithWorldCupAPI(league).catch(err => console.error('Background sync error:', err))
+      (async () => {
+        await syncWithWorldCupAPI(league);
+        await dispatchPendingNotifications();
+      })().catch(err => console.error('Background sync and dispatch error:', err))
     );
     const db = await getData();
     // Filter matches for the selected league
@@ -1858,15 +1861,15 @@ async function initVapidKeys() {
 initVapidKeys().catch(console.error);
 
 // Send Web Push Notification to a user
-async function sendPushNotification(userName, payload) {
-  const db = await getData();
+async function sendPushNotification(userName, payload, dbArg = null) {
+  const db = dbArg || await getData();
   if (!db.pushSubscriptions || db.pushSubscriptions.length === 0) {
-    return { sent: 0, failed: 0, total: 0, errors: [] };
+    return { sent: 0, failed: 0, total: 0, errors: [], deadEndpoints: [] };
   }
   
   const userSubs = db.pushSubscriptions.filter(s => s.userName.toLowerCase() === userName.toLowerCase());
   if (userSubs.length === 0) {
-    return { sent: 0, failed: 0, total: 0, errors: [] };
+    return { sent: 0, failed: 0, total: 0, errors: [], deadEndpoints: [] };
   }
 
   const payloadString = JSON.stringify(payload);
@@ -1893,7 +1896,7 @@ async function sendPushNotification(userName, payload) {
   
   await Promise.all(promises);
   
-  if (deadEndpoints.length > 0) {
+  if (!dbArg && deadEndpoints.length > 0) {
     await runExclusive(async () => {
       const dbUpdate = await getData();
       dbUpdate.pushSubscriptions = dbUpdate.pushSubscriptions.filter(
@@ -1904,7 +1907,7 @@ async function sendPushNotification(userName, payload) {
     });
   }
 
-  return { sent, failed, total: userSubs.length, errors };
+  return { sent, failed, total: userSubs.length, errors, deadEndpoints };
 }
 
 async function enqueuePushNotification(userName, payload, dedupeKey = null) {
@@ -1933,62 +1936,228 @@ async function enqueuePushNotification(userName, payload, dedupeKey = null) {
   return added;
 }
 
+function getMatchIdFromNotification(item) {
+  if (!item || !item.dedupeKey) return null;
+  const parts = item.dedupeKey.split(':');
+  if (parts[0] === 'match') {
+    return parts[1];
+  } else if (parts[0] === 'reminder') {
+    return parts[1];
+  }
+  return null;
+}
+
+function getMatchLeagueFromNotification(item, db) {
+  const matchId = getMatchIdFromNotification(item);
+  if (matchId && db && db.matches) {
+    const match = db.matches.find(m => m.id === matchId);
+    if (match) return match.league;
+  }
+  return null;
+}
+
+function isNotificationAllowedForUser(item, db) {
+  if (!item) return false;
+  
+  const usersMap = new Map((db.users || []).map(u => [u.name.toLowerCase(), u]));
+  const matchesMap = new Map((db.matches || []).map(m => [m.id, m]));
+  
+  const user = usersMap.get(item.userName.toLowerCase());
+  if (user) {
+    const settings = user.notificationSettings || {
+      goals: true,
+      matchStarted: true,
+      matchFinished: true
+    };
+    
+    // 1. Check if the specific notification type is enabled
+    if (item.dedupeKey) {
+      const parts = item.dedupeKey.split(':');
+      const type = parts[0];
+      if (type === 'match') {
+        const subType = parts[2]; // 'score', 'start', 'finish'
+        if (subType === 'score' && !settings.goals) return false;
+        if (subType === 'start' && !settings.matchStarted) return false;
+        if (subType === 'finish' && !settings.matchFinished) return false;
+      } else if (type === 'reminder') {
+        const time = parts[2]; // '60', '30', '15', '5'
+        const key = time === '60' ? 'remind1h' : `remind${time}m`;
+        if (!settings[key]) return false;
+      }
+    }
+
+    // 2. Check if the league of the match is enabled
+    const matchId = getMatchIdFromNotification(item);
+    if (matchId) {
+      const match = matchesMap.get(matchId);
+      if (match) {
+        // If the match is finished, discard it
+        if (match.status === 'finished') {
+          return false;
+        }
+        
+        const matchLeague = match.league || 'fifa.world';
+        const enabledLeagues = settings.enabledLeagues || {
+          'fifa.world': true,
+          'bra.1': true,
+          'uefa.champions': true,
+          'eng.1': true,
+          'esp.1': true
+        };
+        if (enabledLeagues[matchLeague] === false) {
+          return false;
+        }
+      }
+    }
+  }
+
+  // Also check general match status if match details are present
+  const matchId = getMatchIdFromNotification(item);
+  if (matchId) {
+    const match = matchesMap.get(matchId);
+    if (match && match.status === 'finished') {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 async function dispatchPendingNotifications(userName = null) {
   if (!vapidPublic) {
     await initVapidKeys();
   }
 
   const db = await getData();
+  const matchesMap = new Map((db.matches || []).map(m => [m.id, m]));
+  
   let pending = [...(db.pendingPushNotifications || [])];
+  
+  // Filter out pending notifications based on user settings (type, league) and match status
+  pending = pending.filter(item => isNotificationAllowedForUser(item, db));
+
   if (userName) {
     const target = userName.toLowerCase();
     pending = pending.filter(p => p.userName.toLowerCase() === target);
   }
 
+  // Sort pending notifications: guess reminders first (priority = high)
+  pending.sort((a, b) => {
+    const isAReminder = a.dedupeKey && a.dedupeKey.startsWith('reminder:');
+    const isBReminder = b.dedupeKey && b.dedupeKey.startsWith('reminder:');
+    if (isAReminder && !isBReminder) return -1;
+    if (!isAReminder && isBReminder) return 1;
+    return 0;
+  });
+
   if (pending.length === 0) {
-    return { dispatched: 0, failed: 0, remaining: 0, processed: 0 };
+    // Even if no items to dispatch, we still run database cleanup for discarded finished items
+    let remainingCount = 0;
+    await runExclusive(async () => {
+      const dbUpdate = await getData();
+      const updatedPending = (dbUpdate.pendingPushNotifications || []).filter(item => isNotificationAllowedForUser(item, dbUpdate));
+      dbUpdate.pendingPushNotifications = updatedPending;
+      remainingCount = updatedPending.length;
+      await saveData(dbUpdate);
+    });
+    return { dispatched: 0, failed: 0, remaining: remainingCount, processed: 0 };
   }
 
   let dispatched = 0;
   let failed = 0;
-  const dispatchedIds = new Set();
-  const stillPending = [...(db.pendingPushNotifications || [])];
+  const resultsMap = new Map();
+  const allDeadEndpoints = [];
+  const sentHistoryItems = [];
 
-  for (const item of pending) {
-    const result = await sendPushNotification(item.userName, item.payload);
-    const idx = stillPending.findIndex(p => p.id === item.id);
-    if (idx === -1) continue;
+  // Process all pending notifications in parallel
+  await Promise.all(
+    pending.map(async (item) => {
+      const result = await sendPushNotification(item.userName, item.payload, db);
+      if (result.deadEndpoints && result.deadEndpoints.length > 0) {
+        allDeadEndpoints.push(...result.deadEndpoints);
+      }
+      if (result.sent > 0) {
+        dispatched++;
+        resultsMap.set(item.id, { success: true });
+        sentHistoryItems.push({
+          id: item.id,
+          userName: item.userName,
+          title: item.payload.title,
+          body: item.payload.body,
+          url: item.payload.url || null,
+          sentAt: new Date().toISOString(),
+          league: getMatchLeagueFromNotification(item, db)
+        });
+      } else {
+        failed++;
+        resultsMap.set(item.id, { success: false, lastAttemptAt: new Date().toISOString() });
+      }
+    })
+  );
 
-    if (result.sent > 0) {
-      dispatched++;
-      dispatchedIds.add(item.id);
-      stillPending.splice(idx, 1);
-      continue;
-    }
-
-    stillPending[idx] = {
-      ...stillPending[idx],
-      attempts: (stillPending[idx].attempts || 0) + 1,
-      lastAttemptAt: new Date().toISOString()
-    };
-
-    const tooOld = Date.now() - new Date(item.createdAt).getTime() > 24 * 60 * 60 * 1000;
-    if (stillPending[idx].attempts >= 10 || tooOld) {
-      stillPending.splice(idx, 1);
-    }
-    failed++;
-  }
-
+  let remainingCount = 0;
   await runExclusive(async () => {
     const dbUpdate = await getData();
-    dbUpdate.pendingPushNotifications = stillPending;
+    
+    // 1. Clean up dead subscriptions in batch
+    if (allDeadEndpoints.length > 0) {
+      const beforeCount = (dbUpdate.pushSubscriptions || []).length;
+      dbUpdate.pushSubscriptions = (dbUpdate.pushSubscriptions || []).filter(
+        s => !allDeadEndpoints.includes(s.subscription.endpoint)
+      );
+      const afterCount = dbUpdate.pushSubscriptions.length;
+      console.log(`Cleaned up ${beforeCount - afterCount} expired push subscriptions in batch.`);
+    }
+
+    // 2. Safely update the pending queue (race-free) discarding finished matches
+    const updatedPending = [];
+    for (const item of (dbUpdate.pendingPushNotifications || [])) {
+      if (!isNotificationAllowedForUser(item, dbUpdate)) {
+        continue;
+      }
+
+      if (resultsMap.has(item.id)) {
+        const res = resultsMap.get(item.id);
+        if (res.success) {
+          continue;
+        } else {
+          const newAttempts = (item.attempts || 0) + 1;
+          const tooOld = Date.now() - new Date(item.createdAt).getTime() > 24 * 60 * 60 * 1000;
+          if (newAttempts >= 10 || tooOld) {
+            continue;
+          }
+          updatedPending.push({
+            ...item,
+            attempts: newAttempts,
+            lastAttemptAt: res.lastAttemptAt
+          });
+        }
+      } else {
+        updatedPending.push(item);
+      }
+    }
+    
+    // 3. Append to notification history
+    if (sentHistoryItems.length > 0) {
+      if (!dbUpdate.notificationHistory) {
+        dbUpdate.notificationHistory = [];
+      }
+      dbUpdate.notificationHistory.push(...sentHistoryItems);
+      // Cap the history at 1000 items
+      if (dbUpdate.notificationHistory.length > 1000) {
+        dbUpdate.notificationHistory = dbUpdate.notificationHistory.slice(-1000);
+      }
+    }
+    
+    dbUpdate.pendingPushNotifications = updatedPending;
+    remainingCount = updatedPending.length;
     await saveData(dbUpdate);
   });
 
   return {
     dispatched,
     failed,
-    remaining: stillPending.length,
+    remaining: remainingCount,
     processed: pending.length
   };
 }
@@ -2019,6 +2188,18 @@ async function checkAndSendPushNotificationsForMatch(oldMatch, newMatch) {
       matchStarted: true,
       matchFinished: true
     };
+
+    const matchLeague = newMatch.league || 'fifa.world';
+    const enabledLeagues = settings.enabledLeagues || {
+      'fifa.world': true,
+      'bra.1': true,
+      'uefa.champions': true,
+      'eng.1': true,
+      'esp.1': true
+    };
+    if (enabledLeagues[matchLeague] === false) {
+      continue;
+    }
 
     if (settings.goals && (newMatch.status === 'live' || newMatch.status === 'finished') && (scoreAChanged || scoreBChanged)) {
       const goalsA = (newMatch.scoreA || 0) - (oldMatch.scoreA || 0);
@@ -2079,6 +2260,54 @@ app.get('/api/notifications/vapid-public-key', async (req, res) => {
     await initVapidKeys();
   }
   res.json({ publicKey: vapidPublic });
+});
+
+app.get('/api/notifications/history', async (req, res) => {
+  const { userName } = req.query;
+  if (!userName) {
+    return res.status(400).json({ error: 'Falta o nome de usuário.' });
+  }
+
+  try {
+    const db = await getData();
+    const history = db.notificationHistory || [];
+    
+    // Filter history for the specific user
+    const userHistory = history.filter(
+      item => item.userName.toLowerCase() === userName.toString().toLowerCase()
+    );
+    
+    // Sort descending by sentAt (newest first)
+    userHistory.sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt));
+    
+    res.json(userHistory);
+  } catch (error) {
+    console.error('Error fetching notification history:', error);
+    res.status(500).json({ error: 'Erro ao buscar histórico de notificações.' });
+  }
+});
+
+app.post('/api/notifications/history/clear', async (req, res) => {
+  const { userName } = req.body;
+  if (!userName) {
+    return res.status(400).json({ error: 'Falta o nome de usuário.' });
+  }
+
+  try {
+    await runExclusive(async () => {
+      const db = await getData();
+      if (db.notificationHistory) {
+        db.notificationHistory = db.notificationHistory.filter(
+          item => item.userName.toLowerCase() !== userName.toString().toLowerCase()
+        );
+        await saveData(db);
+      }
+    });
+    res.json({ success: true, message: 'Histórico de notificações limpo com sucesso!' });
+  } catch (error) {
+    console.error('Error clearing notification history:', error);
+    res.status(500).json({ error: 'Erro ao limpar histórico.' });
+  }
 });
 
 app.post('/api/notifications/subscribe', async (req, res) => {
@@ -2318,6 +2547,18 @@ async function checkAndSendPushReminders() {
                 remind5m: true
               };
               
+              const matchLeague = match.league || 'fifa.world';
+              const enabledLeagues = settings.enabledLeagues || {
+                'fifa.world': true,
+                'bra.1': true,
+                'uefa.champions': true,
+                'eng.1': true,
+                'esp.1': true
+              };
+              if (enabledLeagues[matchLeague] === false) {
+                continue;
+              }
+              
               if (settings[t.key]) {
                 const added = await enqueuePushNotification(
                   user.name,
@@ -2372,4 +2613,5 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
+export { dispatchPendingNotifications, runServerSideSyncCycle, syncWithWorldCupAPI };
 

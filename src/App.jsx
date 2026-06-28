@@ -29,6 +29,14 @@ import {
   VolumeX
 } from 'lucide-react';
 
+const DEFAULT_LEAGUES = {
+  'fifa.world': true,
+  'bra.1': true,
+  'uefa.champions': true,
+  'eng.1': true,
+  'esp.1': true
+};
+
 // Team emoji auto-mapper (legacy fallback)
 const getTeamEmoji = (name) => {
   if (!name) return '⚽';
@@ -717,7 +725,11 @@ function App() {
     if (userName) {
       const savedSettings = localStorage.getItem(`bolao_notif_settings_${userName}`);
       if (savedSettings) {
-        return JSON.parse(savedSettings);
+        const parsed = JSON.parse(savedSettings);
+        if (!parsed.enabledLeagues) {
+          parsed.enabledLeagues = DEFAULT_LEAGUES;
+        }
+        return parsed;
       }
     }
     return {
@@ -728,7 +740,8 @@ function App() {
       remind30m: true,
       remind15m: true,
       remind5m: true,
-      soundEnabled: true
+      soundEnabled: true,
+      enabledLeagues: DEFAULT_LEAGUES
     };
   });
 
@@ -742,6 +755,39 @@ function App() {
     thisDeviceRegistered: false,
     totalDevices: 0
   });
+
+  const [notificationHistory, setNotificationHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const fetchNotificationHistory = async (silent = false) => {
+    if (!user) return;
+    if (!silent) setLoadingHistory(true);
+    try {
+      const res = await fetch(`/api/notifications/history?userName=${encodeURIComponent(user.name)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setNotificationHistory(data);
+      }
+    } catch (err) {
+      console.error('Error fetching notification history:', err);
+    } finally {
+      if (!silent) setLoadingHistory(false);
+    }
+  };
+
+  const handleNotificationClick = (url) => {
+    if (!url) return;
+    const matchIdMatch = url.match(/match=([^&]+)/);
+    if (matchIdMatch) {
+      const matchId = matchIdMatch[1];
+      const match = matches.find(m => m.id === matchId);
+      if (match) {
+        setSelectedLeague(match.league || 'fifa.world');
+        setActiveTab('matches');
+        setActiveMatchDetails(match);
+      }
+    }
+  };
 
   const isIOSDevice = () => {
     return /iPad|iPhone|iPod/.test(navigator.userAgent)
@@ -1210,6 +1256,12 @@ function App() {
       fetchLeagueStandings(selectedLeague);
     }
   }, [user, selectedLeague, activeTab]);
+
+  useEffect(() => {
+    if (user && activeTab === 'notifications') {
+      fetchNotificationHistory();
+    }
+  }, [user, activeTab]);
 
   // Fetch data
   const fetchMatches = async (silent = false, league = selectedLeague) => {
@@ -2635,6 +2687,17 @@ function App() {
             Tabela & Mata-mata
           </button>
           
+          <button 
+            className={`tab-btn ${activeTab === 'notifications' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('notifications');
+              fetchNotificationHistory();
+            }}
+          >
+            <Bell size={18} />
+            Notificações
+          </button>
+          
           {user.role === 'admin' && viewMode === 'admin' && (
             <button 
               className={`tab-btn ${activeTab === 'admin' ? 'active' : ''}`}
@@ -3518,6 +3581,171 @@ function App() {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+        {/* Tab 5: Sent Notifications History Feed */}
+        {activeTab === 'notifications' && (
+          <div style={{ maxWidth: '700px', margin: '0 auto' }}>
+            <div className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <h3 style={{ fontSize: '18px', fontWeight: '800', margin: 0 }}>Histórico de Notificações</h3>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '12px', margin: '4px 0 0 0' }}>
+                    Alertas push e lembretes enviados para o seu dispositivo neste bolão.
+                  </p>
+                </div>
+                {notificationHistory.length > 0 && (
+                  <button 
+                    onClick={async () => {
+                      if (confirm('Deseja realmente limpar todo o seu histórico de notificações?')) {
+                        try {
+                          const res = await fetch('/api/notifications/history/clear', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userName: user.name })
+                          });
+                          if (res.ok) {
+                            showToast('Histórico limpo com sucesso!');
+                            setNotificationHistory([]);
+                          } else {
+                            showToast('Erro ao limpar histórico.', 'error');
+                          }
+                        } catch (e) {
+                          showToast('Erro ao conectar ao servidor.', 'error');
+                        }
+                      }
+                    }}
+                    className="btn btn-secondary" 
+                    style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    Limpar Tudo
+                  </button>
+                )}
+              </div>
+
+              {(() => {
+                const LEAGUE_LABELS = {
+                  'fifa.world': 'Copa do Mundo',
+                  'bra.1': 'Brasileirão',
+                  'uefa.champions': 'Champions League',
+                  'eng.1': 'Premier League',
+                  'esp.1': 'La Liga'
+                };
+                
+                const filteredHistory = notificationHistory.filter(item => {
+                  if (item.league) {
+                    return item.league === selectedLeague;
+                  }
+                  return selectedLeague === 'fifa.world';
+                });
+
+                if (loadingHistory) {
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 0' }}>
+                      <div className="loading-spinner"></div>
+                      <p style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>Carregando histórico...</p>
+                    </div>
+                  );
+                }
+
+                if (filteredHistory.length === 0) {
+                  return (
+                    <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                      <Bell size={32} style={{ margin: '0 auto 12px auto', opacity: 0.4 }} />
+                      <p style={{ fontSize: '14px', margin: 0 }}>Nenhuma notificação para este campeonato ainda.</p>
+                      <p style={{ fontSize: '11px', marginTop: '4px' }}>
+                        Quando sair um gol, o jogo começar, terminar ou você receber um lembrete deste campeonato, eles aparecerão aqui.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {filteredHistory.map((item) => {
+                      let iconEmoji = '🔔';
+                      let badgeColor = 'rgba(235, 94, 40, 0.15)'; // default orange
+                      if (item.title?.includes('GOL')) {
+                        iconEmoji = '⚽';
+                        badgeColor = 'rgba(46, 196, 182, 0.15)'; // green
+                      } else if (item.title?.includes('Bola Rolando') || item.title?.includes('Começou')) {
+                        iconEmoji = '⏱️';
+                        badgeColor = 'rgba(67, 97, 238, 0.15)'; // blue
+                      } else if (item.title?.includes('Fim de Jogo')) {
+                        iconEmoji = '🏁';
+                        badgeColor = 'rgba(108, 117, 125, 0.15)'; // grey
+                      } else if (item.title?.includes('Palpite Pendente')) {
+                        iconEmoji = '📝';
+                        badgeColor = 'rgba(255, 159, 67, 0.15)'; // yellow/orange
+                      }
+
+                      const isClickable = !!item.url;
+
+                      return (
+                        <div 
+                          key={item.id} 
+                          onClick={() => isClickable && handleNotificationClick(item.url)}
+                          className={`notification-history-item ${isClickable ? 'clickable' : ''}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '12px',
+                            padding: '12px',
+                            borderRadius: 'var(--radius-md)',
+                            background: 'rgba(255,255,255,0.02)',
+                            border: '1px solid var(--border-color)',
+                            cursor: isClickable ? 'pointer' : 'default',
+                            transition: 'all 0.2s ease'
+                          }}
+                        >
+                          <div 
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '36px',
+                              height: '36px',
+                              borderRadius: '50%',
+                              background: badgeColor,
+                              fontSize: '18px',
+                              flexShrink: 0
+                            }}
+                          >
+                            {iconEmoji}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
+                              <h4 style={{ fontSize: '14px', fontWeight: '800', margin: 0 }}>{item.title}</h4>
+                              <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>
+                                {new Date(item.sentAt).toLocaleString('pt-BR', {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </span>
+                            </div>
+                            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '4px 0 0 0', lineHeight: 1.4 }}>
+                              {item.body}
+                            </p>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', flexWrap: 'wrap' }}>
+                              {isClickable && (
+                                <span style={{ fontSize: '10px', color: 'var(--color-primary)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: '700' }}>
+                                  Ver Detalhes do Jogo <ExternalLink size={10} style={{ display: 'inline' }} />
+                                </span>
+                              )}
+                              <span style={{ fontSize: '10px', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', padding: '1px 6px', borderRadius: '4px' }}>
+                                {LEAGUE_LABELS[item.league] || 'Copa do Mundo'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -4566,6 +4794,117 @@ function App() {
                     Ativar Notificações neste Dispositivo
                   </button>
                 )}
+              </div>
+
+              {/* Seção de Campeonatos Ativos */}
+              <h4 className="settings-section-title">Campeonatos Ativos</h4>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '-8px', marginBottom: '15px' }}>
+                Selecione de quais ligas você deseja receber notificações push:
+              </p>
+              
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">Copa do Mundo</span>
+                  <span className="settings-desc">Alertas de jogos da Copa do Mundo FIFA</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={!!(notificationSettings.enabledLeagues?.['fifa.world'] ?? true)} 
+                    onChange={(e) => updateNotificationSettings({
+                      ...notificationSettings,
+                      enabledLeagues: {
+                        ...(notificationSettings.enabledLeagues || DEFAULT_LEAGUES),
+                        'fifa.world': e.target.checked
+                      }
+                    })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">Brasileirão Série A</span>
+                  <span className="settings-desc">Alertas do Campeonato Brasileiro</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={!!(notificationSettings.enabledLeagues?.['bra.1'] ?? true)} 
+                    onChange={(e) => updateNotificationSettings({
+                      ...notificationSettings,
+                      enabledLeagues: {
+                        ...(notificationSettings.enabledLeagues || DEFAULT_LEAGUES),
+                        'bra.1': e.target.checked
+                      }
+                    })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">UEFA Champions League</span>
+                  <span className="settings-desc">Alertas da Liga dos Campeões da UEFA</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={!!(notificationSettings.enabledLeagues?.['uefa.champions'] ?? true)} 
+                    onChange={(e) => updateNotificationSettings({
+                      ...notificationSettings,
+                      enabledLeagues: {
+                        ...(notificationSettings.enabledLeagues || DEFAULT_LEAGUES),
+                        'uefa.champions': e.target.checked
+                      }
+                    })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-info">
+                  <span className="settings-label">Premier League</span>
+                  <span className="settings-desc">Alertas da liga nacional da Inglaterra</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={!!(notificationSettings.enabledLeagues?.['eng.1'] ?? true)} 
+                    onChange={(e) => updateNotificationSettings({
+                      ...notificationSettings,
+                      enabledLeagues: {
+                        ...(notificationSettings.enabledLeagues || DEFAULT_LEAGUES),
+                        'eng.1': e.target.checked
+                      }
+                    })} 
+                  />
+                  <span className="slider"></span>
+                </label>
+              </div>
+
+              <div className="settings-row" style={{ marginBottom: '20px' }}>
+                <div className="settings-info">
+                  <span className="settings-label">La Liga</span>
+                  <span className="settings-desc">Alertas da liga nacional da Espanha</span>
+                </div>
+                <label className="switch">
+                  <input 
+                    type="checkbox" 
+                    checked={!!(notificationSettings.enabledLeagues?.['esp.1'] ?? true)} 
+                    onChange={(e) => updateNotificationSettings({
+                      ...notificationSettings,
+                      enabledLeagues: {
+                        ...(notificationSettings.enabledLeagues || DEFAULT_LEAGUES),
+                        'esp.1': e.target.checked
+                      }
+                    })} 
+                  />
+                  <span className="slider"></span>
+                </label>
               </div>
 
               {/* Seção 1: Alertas das Partidas */}
