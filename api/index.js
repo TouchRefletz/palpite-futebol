@@ -1727,22 +1727,33 @@ initVapidKeys().catch(console.error);
 // Send Web Push Notification to a user
 async function sendPushNotification(userName, payload) {
   const db = await getData();
-  if (!db.pushSubscriptions || db.pushSubscriptions.length === 0) return;
+  if (!db.pushSubscriptions || db.pushSubscriptions.length === 0) {
+    return { sent: 0, failed: 0, total: 0, errors: [] };
+  }
   
   const userSubs = db.pushSubscriptions.filter(s => s.userName.toLowerCase() === userName.toLowerCase());
-  if (userSubs.length === 0) return;
+  if (userSubs.length === 0) {
+    return { sent: 0, failed: 0, total: 0, errors: [] };
+  }
 
   const payloadString = JSON.stringify(payload);
   const deadEndpoints = [];
+  const errors = [];
+  let sent = 0;
+  let failed = 0;
   
   const promises = userSubs.map(async (sub) => {
     try {
       await webpush.sendNotification(sub.subscription, payloadString);
+      sent++;
     } catch (err) {
+      failed++;
       if (err.statusCode === 410 || err.statusCode === 404) {
         deadEndpoints.push(sub.subscription.endpoint);
       } else {
-        console.error(`Error sending push to ${userName}:`, err.message || err);
+        const endpointHint = sub.subscription.endpoint.slice(-12);
+        errors.push({ endpoint: endpointHint, message: err.message || String(err), statusCode: err.statusCode });
+        console.error(`Error sending push to ${userName} (${endpointHint}):`, err.message || err);
       }
     }
   });
@@ -1759,6 +1770,8 @@ async function sendPushNotification(userName, payload) {
       console.log(`Cleaned up ${deadEndpoints.length} expired push subscriptions.`);
     });
   }
+
+  return { sent, failed, total: userSubs.length, errors };
 }
 
 // Compare old and new match and send goal/start/finish alerts
@@ -1860,20 +1873,63 @@ app.post('/api/notifications/subscribe', async (req, res) => {
 });
 
 app.post('/api/notifications/test', async (req, res) => {
-  const { userName } = req.body;
+  const { userName, endpoint } = req.body;
   if (!userName) {
     return res.status(400).json({ error: 'Falta o nome de usuário.' });
   }
   try {
-    await sendPushNotification(userName, {
+    const db = await getData();
+    const userSubs = (db.pushSubscriptions || []).filter(
+      s => s.userName.toLowerCase() === userName.toLowerCase()
+    );
+    const thisDeviceRegistered = endpoint
+      ? userSubs.some(s => s.subscription.endpoint === endpoint)
+      : false;
+
+    if (userSubs.length === 0) {
+      return res.status(404).json({
+        error: 'Nenhum dispositivo registrado para este usuário. Use "Sincronizar Dispositivo" neste aparelho.',
+        totalDevices: 0,
+        thisDeviceRegistered: false
+      });
+    }
+
+    const result = await sendPushNotification(userName, {
       title: '🔔 Teste de Notificação!',
       body: 'Parabéns! Suas notificações push do Bolão de Futebol estão configuradas e funcionando corretamente.',
       url: '/'
     });
-    res.json({ success: true });
+
+    res.json({
+      success: result.sent > 0,
+      ...result,
+      totalDevices: userSubs.length,
+      thisDeviceRegistered
+    });
   } catch (err) {
     console.error('Failed to send test push:', err);
     res.status(500).json({ error: 'Erro ao enviar notificação de teste.' });
+  }
+});
+
+app.get('/api/notifications/device-status', async (req, res) => {
+  const { userName, endpoint } = req.query;
+  if (!userName || !endpoint) {
+    return res.status(400).json({ error: 'Faltam userName ou endpoint.' });
+  }
+  try {
+    const db = await getData();
+    const userSubs = (db.pushSubscriptions || []).filter(
+      s => s.userName.toLowerCase() === userName.toLowerCase()
+    );
+    const thisDeviceRegistered = userSubs.some(s => s.subscription.endpoint === endpoint);
+    res.json({
+      totalDevices: userSubs.length,
+      thisDeviceRegistered
+    });
+  } catch (err) {
+    console.error('Failed to check device status:', err);
+    res.status(500).json({ error: 'Erro ao verificar dispositivo.' });
   }
 });
 

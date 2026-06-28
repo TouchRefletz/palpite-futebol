@@ -737,6 +737,55 @@ function App() {
     if (!('Notification' in window)) return 'denied';
     return Notification.permission;
   });
+  const [pushDeviceStatus, setPushDeviceStatus] = useState({
+    checked: false,
+    thisDeviceRegistered: false,
+    totalDevices: 0
+  });
+
+  const isIOSDevice = () => {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  };
+
+  const isInstalledPwa = () => {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  };
+
+  const getLocalPushEndpoint = async () => {
+    if (!('serviceWorker' in navigator)) return null;
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      return subscription?.endpoint || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const refreshPushDeviceStatus = async () => {
+    if (!user?.name) return;
+    const endpoint = await getLocalPushEndpoint();
+    if (!endpoint) {
+      setPushDeviceStatus({ checked: true, thisDeviceRegistered: false, totalDevices: 0 });
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/notifications/device-status?userName=${encodeURIComponent(user.name)}&endpoint=${encodeURIComponent(endpoint)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setPushDeviceStatus({
+          checked: true,
+          thisDeviceRegistered: data.thisDeviceRegistered,
+          totalDevices: data.totalDevices
+        });
+      }
+    } catch (err) {
+      console.error('Failed to refresh push device status:', err);
+    }
+  };
 
   // Sync settings when user logs in or user details are updated
   useEffect(() => {
@@ -776,9 +825,27 @@ function App() {
   };
 
   const subscribeToPushNotifications = async (silent = false) => {
+    if (!user?.name) {
+      if (!silent) showToast('Faça login antes de ativar notificações.', 'error');
+      return false;
+    }
+
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      if (!silent) showToast('Push não suportado neste navegador/dispositivo.', 'error');
-      return;
+      if (isIOSDevice() && !isInstalledPwa()) {
+        if (!silent) {
+          showToast('No iPhone: toque em Compartilhar → "Adicionar à Tela de Início" e abra o app por lá.', 'error');
+        }
+      } else if (!silent) {
+        showToast('Push não suportado neste navegador. Use Chrome no Android ou Safari instalado no iPhone.', 'error');
+      }
+      return false;
+    }
+
+    if (isIOSDevice() && !isInstalledPwa()) {
+      if (!silent) {
+        showToast('No iPhone, instale o app na Tela de Início antes de ativar notificações.', 'error');
+      }
+      return false;
     }
 
     try {
@@ -786,21 +853,43 @@ function App() {
       setNotificationPermissionStatus(permission);
       if (permission !== 'granted') {
         if (!silent) showToast('Permissão de notificações negada.', 'error');
-        return;
+        return false;
       }
 
       const registration = await navigator.serviceWorker.ready;
       
-      // Clear any existing subscription to prevent key conflicts (InvalidStateError)
-      const existingSubscription = await registration.pushManager.getSubscription();
-      if (existingSubscription) {
-        await existingSubscription.unsubscribe();
-        console.log('Unsubscribed from old push subscription to avoid key conflicts.');
-      }
-      
       const keyRes = await fetch('/api/notifications/vapid-public-key');
       if (!keyRes.ok) throw new Error('Failed to fetch VAPID key');
       const { publicKey } = await keyRes.json();
+
+      const existingSubscription = await registration.pushManager.getSubscription();
+      if (existingSubscription) {
+        const existingKeyRaw = existingSubscription.options?.applicationServerKey;
+        const newKey = urlBase64ToUint8Array(publicKey);
+        let sameKey = false;
+        if (existingKeyRaw) {
+          const existingKey = new Uint8Array(existingKeyRaw);
+          sameKey = existingKey.length === newKey.length
+            && newKey.every((byte, i) => existingKey[i] === byte);
+        }
+
+        if (sameKey) {
+          const subRes = await fetch('/api/notifications/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscription: existingSubscription,
+              userName: user.name
+            })
+          });
+          if (!subRes.ok) throw new Error('Server subscription failed');
+          await refreshPushDeviceStatus();
+          if (!silent) showToast('Este dispositivo já estava sincronizado!');
+          return true;
+        }
+
+        await existingSubscription.unsubscribe();
+      }
       
       const subscribeOptions = {
         userVisibleOnly: true,
@@ -808,7 +897,6 @@ function App() {
       };
 
       const subscription = await registration.pushManager.subscribe(subscribeOptions);
-      console.log('Registered Push Subscription:', subscription);
 
       const subRes = await fetch('/api/notifications/subscribe', {
         method: 'POST',
@@ -820,13 +908,15 @@ function App() {
       });
 
       if (subRes.ok) {
-        if (!silent) showToast('Notificações ativadas com sucesso!');
-      } else {
-        throw new Error('Server subscription failed');
+        await refreshPushDeviceStatus();
+        if (!silent) showToast('Notificações ativadas neste dispositivo!');
+        return true;
       }
+      throw new Error('Server subscription failed');
     } catch (err) {
       console.error('Failed to subscribe to push notifications:', err);
-      if (!silent) showToast('Erro ao ativar notificações.', 'error');
+      if (!silent) showToast('Erro ao ativar notificações neste dispositivo.', 'error');
+      return false;
     }
   };
 
@@ -837,19 +927,31 @@ function App() {
     }
   }, [user, notificationPermissionStatus]);
 
+  useEffect(() => {
+    if (user && isSettingsModalOpen) {
+      refreshPushDeviceStatus();
+    }
+  }, [user, isSettingsModalOpen, notificationPermissionStatus]);
+
   const sendTestPushNotification = async () => {
     if (!user?.name) return;
     try {
+      const endpoint = await getLocalPushEndpoint();
       const res = await fetch('/api/notifications/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userName: user.name })
+        body: JSON.stringify({ userName: user.name, endpoint })
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        showToast('Notificação de teste enviada!');
+        if (data.thisDeviceRegistered) {
+          showToast(`Teste enviado para ${data.sent} dispositivo(s). Este aparelho está registrado.`);
+        } else {
+          showToast(`Enviado para ${data.sent} outro(s) aparelho(s), mas ESTE celular não está sincronizado. Toque em "Sincronizar Dispositivo".`, 'error');
+        }
+        await refreshPushDeviceStatus();
       } else {
-        const errData = await res.json();
-        showToast(errData.error || 'Erro ao enviar teste.', 'error');
+        showToast(data.error || 'Erro ao enviar teste.', 'error');
       }
     } catch (err) {
       console.error(err);
@@ -4420,6 +4522,18 @@ function App() {
                     {notificationPermissionStatus === 'granted' ? 'Ativada' : notificationPermissionStatus === 'denied' ? 'Bloqueada' : 'Pendente'}
                   </span>
                 </span>
+                {pushDeviceStatus.checked && (
+                  <p style={{ fontSize: '11px', color: pushDeviceStatus.thisDeviceRegistered ? 'var(--accent-green, #22c55e)' : '#f59e0b', margin: '8px 0 0', textAlign: 'center' }}>
+                    {pushDeviceStatus.thisDeviceRegistered
+                      ? `✓ Este aparelho está sincronizado (${pushDeviceStatus.totalDevices} no total)`
+                      : `⚠ Este aparelho NÃO está sincronizado${pushDeviceStatus.totalDevices > 0 ? ` — ${pushDeviceStatus.totalDevices} outro(s) aparelho(s) registrado(s)` : ''}`}
+                  </p>
+                )}
+                {isIOSDevice() && !isInstalledPwa() && (
+                  <p style={{ fontSize: '11px', color: '#f59e0b', margin: '8px 0 0', textAlign: 'center', lineHeight: 1.4 }}>
+                    iPhone: abra o Safari → Compartilhar → <strong>Adicionar à Tela de Início</strong> → abra o ícone do Bolão e ative as notificações por lá.
+                  </p>
+                )}
                 {notificationPermissionStatus === 'granted' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', alignItems: 'center' }}>
                     <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
