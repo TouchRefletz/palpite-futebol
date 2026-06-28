@@ -1038,6 +1038,12 @@ app.post('/api/guesses', async (req, res) => {
       let guess = db.guesses.find(g => g.matchId === matchId && g.userName.toLowerCase() === userName.toLowerCase());
 
       if (guess) {
+        // Durante o jogo, não permite alterar palpite existente (apenas admin)
+        if (hasStarted && requesterRole !== 'admin') {
+          errorResponse = { status: 400, error: 'Você já palpitou neste jogo. Não é possível alterar o palpite com a partida em andamento.' };
+          return;
+        }
+
         guess.scoreA = parseInt(scoreA);
         guess.scoreB = parseInt(scoreB);
         guess.updatedAt = new Date().toISOString();

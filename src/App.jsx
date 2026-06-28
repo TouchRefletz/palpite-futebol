@@ -2381,7 +2381,8 @@ function App() {
                   {user.role === 'admin' ? (viewMode === 'admin' ? 'Organizador' : 'Org (Jogador)') : 'Participante'}
                 </span>
               </div>
-              
+
+              <div className="header-toolbar">
               {user.role === 'admin' && (
                 <button 
                   onClick={() => {
@@ -2419,6 +2420,7 @@ function App() {
               <button onClick={handleLogout} className="btn btn-secondary btn-icon-only" title="Sair">
                 <LogOut size={16} />
               </button>
+              </div>
             </div>
           </div>
         </div>
@@ -3819,6 +3821,7 @@ function App() {
                         </div>
                       )}
                       {activeMatchDetails.status !== 'finished' && (
+                        (new Date(activeMatchDetails.date) >= new Date() && activeMatchDetails.status !== 'live') && (
                         <button 
                           onClick={() => {
                             setGuessModal({ isOpen: true, match: activeMatchDetails });
@@ -3833,6 +3836,7 @@ function App() {
                         >
                           Alterar Palpite
                         </button>
+                        )
                       )}
                     </div>
                   ) : (
