@@ -1,43 +1,144 @@
-name: Sync Cron
+name: Bolão Sync e Notificações
 
 on:
   schedule:
-    # 5 schedules defasados = sync a cada ~1 minuto (limite mínimo do GitHub é 5 min por schedule)
-    - cron: '0/5 * * * *'
-    - cron: '1/5 * * * *'
-    - cron: '2/5 * * * *'
-    - cron: '3/5 * * * *'
-    - cron: '4/5 * * * *'
+    # Bootstrap: reinicia o loop se ele parar (repo inativo, token expirado, etc.)
+    - cron: "0/5 * * * *"
+    - cron: "1/5 * * * *"
+    - cron: "2/5 * * * *"
+    - cron: "3/5 * * * *"
+    - cron: "4/5 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: bolao-sync-and-notify
+  cancel-in-progress: false
+
 jobs:
-  sync:
+  sync-and-notify:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Disparar sincronização no servidor
+      - name: 1. Sincronizar jogos e enfileirar alertas
+        id: sync
         env:
           DEPLOYMENT_URL: ${{ vars.DEPLOYMENT_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
+          set -euo pipefail
+
           if [ -z "$DEPLOYMENT_URL" ]; then
-            echo "Configure a variável DEPLOYMENT_URL em Settings > Secrets and variables > Actions > Variables"
-            echo "Exemplo: https://seu-app.vercel.app"
+            echo "::error::Configure DEPLOYMENT_URL em Settings > Secrets and variables > Actions > Variables"
             exit 1
           fi
 
-          url="${DEPLOYMENT_URL%/}/api/sync-cron"
-          headers=(-sS -o /tmp/sync-response.txt -w "%{http_code}")
+          call_api() {
+            local method="$1"
+            local path="$2"
+            local url="${DEPLOYMENT_URL%/}${path}"
+            local curl_args=(
+              -sS
+              -o /tmp/bolao-response.txt
+              -w "%{http_code}"
+              -X "$method"
+              --retry 3
+              --retry-delay 5
+              --retry-all-errors
+              --max-time 55
+            )
 
-          if [ -n "$CRON_SECRET" ]; then
-            headers+=(-H "Authorization: Bearer $CRON_SECRET")
+            if [ -n "$CRON_SECRET" ]; then
+              curl_args+=(-H "Authorization: Bearer $CRON_SECRET")
+            fi
+
+            status=$(curl "${curl_args[@]}" "$url")
+            body=$(cat /tmp/bolao-response.txt)
+
+            echo "[$method $path] Status: $status"
+            echo "Resposta: $body"
+
+            if [ "$status" != "200" ]; then
+              echo "::error::Falha em $path (HTTP $status)"
+              return 1
+            fi
+          }
+
+          call_api GET /api/sync-cron
+
+      - name: 2. Enviar notificações pendentes aos dispositivos
+        id: dispatch
+        if: ${{ always() && steps.sync.outcome != 'cancelled' }}
+        env:
+          DEPLOYMENT_URL: ${{ vars.DEPLOYMENT_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "::warning::DEPLOYMENT_URL ausente — pulando envio de notificações."
+            exit 0
           fi
 
-          status=$(curl "${headers[@]}" "$url")
-          body=$(cat /tmp/sync-response.txt)
+          url="${DEPLOYMENT_URL%/}/api/notifications/dispatch-pending"
+          curl_args=(
+            -sS
+            -o /tmp/bolao-dispatch.txt
+            -w "%{http_code}"
+            -X POST
+            --retry 3
+            --retry-delay 5
+            --retry-all-errors
+            --max-time 55
+          )
 
-          echo "Status: $status"
+          if [ -n "$CRON_SECRET" ]; then
+            curl_args+=(-H "Authorization: Bearer $CRON_SECRET")
+          fi
+
+          status=$(curl "${curl_args[@]}" "$url")
+          body=$(cat /tmp/bolao-dispatch.txt)
+
+          echo "[POST /api/notifications/dispatch-pending] Status: $status"
           echo "Resposta: $body"
 
           if [ "$status" != "200" ]; then
+            echo "::error::Falha ao enviar notificações pendentes (HTTP $status)"
             exit 1
           fi
+
+      - name: 3. Disparar próxima execução (loop contínuo)
+        if: ${{ !cancelled() }}
+        env:
+          WORKFLOW_TRIGGER_TOKEN: ${{ secrets.WORKFLOW_TRIGGER_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$WORKFLOW_TRIGGER_TOKEN" ]; then
+            echo "::warning::Secret WORKFLOW_TRIGGER_TOKEN não configurado — loop automático desabilitado."
+            echo "Os schedules do GitHub ainda rodam ~1x/min como fallback."
+            exit 0
+          fi
+
+          LOOP_DELAY_SECONDS="${LOOP_DELAY_SECONDS:-10}"
+          echo "Aguardando ${LOOP_DELAY_SECONDS}s antes de disparar a próxima execução..."
+          sleep "$LOOP_DELAY_SECONDS"
+
+          status=$(curl -sS -o /tmp/bolao-trigger.txt -w "%{http_code}" -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $WORKFLOW_TRIGGER_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/sync-cron.yml/dispatches" \
+            -d "{\"ref\":\"${{ github.ref_name }}\"}")
+
+          echo "Disparo do próximo workflow — HTTP $status"
+
+          if [ "$status" != "204" ]; then
+            echo "::error::Falha ao disparar próxima execução do workflow"
+            cat /tmp/bolao-trigger.txt
+            exit 1
+          fi
+
+          echo "Próxima execução agendada com sucesso."

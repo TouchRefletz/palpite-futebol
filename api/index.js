@@ -105,8 +105,10 @@ async function runServerSideSyncCycle() {
 
   await checkAndSendPushReminders();
 
-  const db = await getData();
-  const activeLeagues = getActiveLeaguesFromDb(db);
+  const dbBefore = await getData();
+  const pendingBefore = (dbBefore.pendingPushNotifications || []).length;
+
+  const activeLeagues = getActiveLeaguesFromDb(dbBefore);
   const leaguesToSync = activeLeagues.size > 0 ? [...activeLeagues] : ALL_LEAGUES;
 
   for (const league of leaguesToSync) {
@@ -117,7 +119,24 @@ async function runServerSideSyncCycle() {
     }
   }
 
-  return { activeLeagues: [...activeLeagues], synced: leaguesToSync };
+  const dbAfter = await getData();
+  const pendingAfter = (dbAfter.pendingPushNotifications || []).length;
+
+  return {
+    activeLeagues: [...activeLeagues],
+    synced: leaguesToSync,
+    pendingBefore,
+    pendingAfter,
+    newlyQueued: Math.max(0, pendingAfter - pendingBefore)
+  };
+}
+
+function isCronAuthorized(req) {
+  const authHeader = req.headers.authorization;
+  if (process.env.CRON_SECRET) {
+    return authHeader === `Bearer ${process.env.CRON_SECRET}`;
+  }
+  return true;
 }
 
 const STADIUM_OFFSETS = {
@@ -781,6 +800,7 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
           for (const item of updatedMatchesToNotify) {
             await checkAndSendPushNotificationsForMatch(item.oldMatch, item.newMatch);
           }
+          await dispatchPendingNotifications();
         }
       }
     });
@@ -1203,6 +1223,7 @@ app.post('/api/results', async (req, res) => {
 
     if (oldMatchForPush && newMatchForPush) {
       await checkAndSendPushNotificationsForMatch(oldMatchForPush, newMatchForPush);
+      await dispatchPendingNotifications();
     }
 
     if (errorResponse) {
@@ -1727,6 +1748,7 @@ app.post('/api/copa2026/simulate-live', async (req, res) => {
 
     if (oldMatchForPush && newMatchForPush) {
       await checkAndSendPushNotificationsForMatch(oldMatchForPush, newMatchForPush);
+      await dispatchPendingNotifications();
     }
 
     if (errorResponse) {
@@ -1816,22 +1838,110 @@ async function sendPushNotification(userName, payload) {
   return { sent, failed, total: userSubs.length, errors };
 }
 
-// Compare old and new match and send goal/start/finish alerts
+async function enqueuePushNotification(userName, payload, dedupeKey = null) {
+  let added = false;
+  await runExclusive(async () => {
+    const db = await getData();
+    if (!db.pendingPushNotifications) {
+      db.pendingPushNotifications = [];
+    }
+
+    if (dedupeKey && db.pendingPushNotifications.some(p => p.dedupeKey === dedupeKey)) {
+      return;
+    }
+
+    db.pendingPushNotifications.push({
+      id: generateId(),
+      userName,
+      payload,
+      dedupeKey,
+      createdAt: new Date().toISOString(),
+      attempts: 0
+    });
+    added = true;
+    await saveData(db);
+  });
+  return added;
+}
+
+async function dispatchPendingNotifications(userName = null) {
+  if (!vapidPublic) {
+    await initVapidKeys();
+  }
+
+  const db = await getData();
+  let pending = [...(db.pendingPushNotifications || [])];
+  if (userName) {
+    const target = userName.toLowerCase();
+    pending = pending.filter(p => p.userName.toLowerCase() === target);
+  }
+
+  if (pending.length === 0) {
+    return { dispatched: 0, failed: 0, remaining: 0, processed: 0 };
+  }
+
+  let dispatched = 0;
+  let failed = 0;
+  const dispatchedIds = new Set();
+  const stillPending = [...(db.pendingPushNotifications || [])];
+
+  for (const item of pending) {
+    const result = await sendPushNotification(item.userName, item.payload);
+    const idx = stillPending.findIndex(p => p.id === item.id);
+    if (idx === -1) continue;
+
+    if (result.sent > 0) {
+      dispatched++;
+      dispatchedIds.add(item.id);
+      stillPending.splice(idx, 1);
+      continue;
+    }
+
+    stillPending[idx] = {
+      ...stillPending[idx],
+      attempts: (stillPending[idx].attempts || 0) + 1,
+      lastAttemptAt: new Date().toISOString()
+    };
+
+    const tooOld = Date.now() - new Date(item.createdAt).getTime() > 24 * 60 * 60 * 1000;
+    if (stillPending[idx].attempts >= 10 || tooOld) {
+      stillPending.splice(idx, 1);
+    }
+    failed++;
+  }
+
+  await runExclusive(async () => {
+    const dbUpdate = await getData();
+    dbUpdate.pendingPushNotifications = stillPending;
+    await saveData(dbUpdate);
+  });
+
+  return {
+    dispatched,
+    failed,
+    remaining: stillPending.length,
+    processed: pending.length
+  };
+}
+
+// Compare old and new match and queue goal/start/finish alerts
 async function checkAndSendPushNotificationsForMatch(oldMatch, newMatch) {
-  if (!oldMatch) return;
-  
+  if (!oldMatch) return 0;
+
   const scoreAChanged = newMatch.scoreA !== oldMatch.scoreA;
   const scoreBChanged = newMatch.scoreB !== oldMatch.scoreB;
   const statusChanged = newMatch.status !== oldMatch.status;
-  
-  if (!scoreAChanged && !scoreBChanged && !statusChanged) return;
-  
+
+  if (!scoreAChanged && !scoreBChanged && !statusChanged) return 0;
+
   const db = await getData();
   const users = db.users || [];
   const subscribedUsers = new Set(
     (db.pushSubscriptions || []).map(s => s.userName.toLowerCase())
   );
-  
+
+  let queued = 0;
+
   for (const user of users) {
     if (!subscribedUsers.has(user.name.toLowerCase())) continue;
 
@@ -1840,12 +1950,11 @@ async function checkAndSendPushNotificationsForMatch(oldMatch, newMatch) {
       matchStarted: true,
       matchFinished: true
     };
-    
-    // Alerta de Gols
+
     if (settings.goals && newMatch.status === 'live' && (scoreAChanged || scoreBChanged)) {
       const goalsA = (newMatch.scoreA || 0) - (oldMatch.scoreA || 0);
       const goalsB = (newMatch.scoreB || 0) - (oldMatch.scoreB || 0);
-      
+
       let title = "⚽ GOL!";
       let body = "";
       if (goalsA > 0) {
@@ -1856,32 +1965,43 @@ async function checkAndSendPushNotificationsForMatch(oldMatch, newMatch) {
         title = "🖥️ Placar Alterado (VAR)";
         body = `Placar atualizado: ${newMatch.teamA} ${newMatch.scoreA} x ${newMatch.scoreB} ${newMatch.teamB}`;
       }
-      
-      await sendPushNotification(user.name, {
-        title,
-        body,
-        url: `/?match=${newMatch.id}`
-      });
+
+      const added = await enqueuePushNotification(
+        user.name,
+        { title, body, url: `/?match=${newMatch.id}` },
+        `match:${newMatch.id}:score:${newMatch.scoreA}-${newMatch.scoreB}:${user.name.toLowerCase()}`
+      );
+      if (added) queued++;
     }
-    
-    // Alerta de Início de Partida
+
     if (settings.matchStarted && statusChanged && newMatch.status === 'live') {
-      await sendPushNotification(user.name, {
-        title: "⏱️ Bola Rolando!",
-        body: `Começou: ${newMatch.teamA} vs ${newMatch.teamB}`,
-        url: `/?match=${newMatch.id}`
-      });
+      const added = await enqueuePushNotification(
+        user.name,
+        {
+          title: "⏱️ Bola Rolando!",
+          body: `Começou: ${newMatch.teamA} vs ${newMatch.teamB}`,
+          url: `/?match=${newMatch.id}`
+        },
+        `match:${newMatch.id}:start:${user.name.toLowerCase()}`
+      );
+      if (added) queued++;
     }
-    
-    // Alerta de Fim de Partida
+
     if (settings.matchFinished && statusChanged && newMatch.status === 'finished') {
-      await sendPushNotification(user.name, {
-        title: "🏁 Fim de Jogo!",
-        body: `Resultado Final: ${newMatch.teamA} ${newMatch.scoreA} x ${newMatch.scoreB} ${newMatch.teamB}`,
-        url: `/?match=${newMatch.id}`
-      });
+      const added = await enqueuePushNotification(
+        user.name,
+        {
+          title: "🏁 Fim de Jogo!",
+          body: `Resultado Final: ${newMatch.teamA} ${newMatch.scoreA} x ${newMatch.scoreB} ${newMatch.teamB}`,
+          url: `/?match=${newMatch.id}`
+        },
+        `match:${newMatch.id}:finish:${newMatch.scoreA}-${newMatch.scoreB}:${user.name.toLowerCase()}`
+      );
+      if (added) queued++;
     }
   }
+
+  return queued;
 }
 
 // Endpoints
@@ -1912,6 +2032,11 @@ app.post('/api/notifications/subscribe', async (req, res) => {
       }
       await saveData(db);
     });
+    waitUntil(
+      dispatchPendingNotifications(userName).catch(err =>
+        console.error(`Failed to dispatch pending notifications for ${userName}:`, err)
+      )
+    );
     res.status(201).json({ success: true });
   } catch (error) {
     console.error('Error subscribing to push:', error);
@@ -2002,8 +2127,7 @@ app.post('/api/users/settings', async (req, res) => {
 });
 
 app.get('/api/sync-cron', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!isCronAuthorized(req)) {
     console.log('Unauthorized cron access attempt.');
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -2022,7 +2146,7 @@ app.get('/api/sync-cron', async (req, res) => {
 
     await releaseLock('cron_active');
     console.log('Cron sync complete.', result);
-    return res.status(200).json({ message: 'Sync complete.', ...result });
+    return res.status(200).json({ message: 'Sync complete. Notifications queued.', ...result });
   } catch (error) {
     console.error('Error in cron handler:', error);
     try {
@@ -2032,6 +2156,39 @@ app.get('/api/sync-cron', async (req, res) => {
       console.error('Failed to release lock in error handler:', lockErr);
     }
     return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.post('/api/notifications/dispatch-pending', async (req, res) => {
+  if (!isCronAuthorized(req)) {
+    console.log('Unauthorized dispatch access attempt.');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const { getLock, releaseLock } = await import('./db.js');
+    const lockAcquired = await getLock('push_dispatch_active', 50);
+    if (!lockAcquired) {
+      return res.status(200).json({ message: 'Another dispatch is already running.' });
+    }
+
+    const result = await dispatchPendingNotifications();
+    await releaseLock('push_dispatch_active');
+
+    console.log('Pending notifications dispatched.', result);
+    return res.status(200).json({
+      message: 'Pending notifications processed.',
+      ...result
+    });
+  } catch (error) {
+    console.error('Error dispatching pending notifications:', error);
+    try {
+      const { releaseLock } = await import('./db.js');
+      await releaseLock('push_dispatch_active');
+    } catch (lockErr) {
+      console.error('Failed to release dispatch lock:', lockErr);
+    }
+    return res.status(500).json({ error: 'Erro ao enviar notificações pendentes.' });
   }
 });
 
@@ -2093,11 +2250,18 @@ async function checkAndSendPushReminders() {
               };
               
               if (settings[t.key]) {
-                await sendPushNotification(user.name, {
-                  title: "📝 Palpite Pendente!",
-                  body: `O jogo ${match.teamA} vs ${match.teamB} começa em ${t.label}. Não esqueça de palpitar!`,
-                  url: `/?match=${matchId}`
-                });
+                const added = await enqueuePushNotification(
+                  user.name,
+                  {
+                    title: "📝 Palpite Pendente!",
+                    body: `O jogo ${match.teamA} vs ${match.teamB} começa em ${t.label}. Não esqueça de palpitar!`,
+                    url: `/?match=${matchId}`
+                  },
+                  `reminder:${matchId}:${t.time}:${user.name.toLowerCase()}`
+                );
+                if (added) {
+                  // counted via queue
+                }
               }
             }
           }
@@ -2126,10 +2290,15 @@ async function checkAndSendPushReminders() {
   }
 }
 
-// Scheduler server-side: roda sync + push automaticamente sem precisar do site aberto
+// Scheduler server-side: roda sync + enfileira alertas; dispatch é feito em seguida
 if (!process.env.VERCEL) {
-  setInterval(() => {
-    runServerSideSyncCycle().catch(err => console.error('Local sync cycle error:', err));
+  setInterval(async () => {
+    try {
+      await runServerSideSyncCycle();
+      await dispatchPendingNotifications();
+    } catch (err) {
+      console.error('Local sync/dispatch cycle error:', err);
+    }
   }, 60000);
 }
 
