@@ -68,6 +68,54 @@ jobs:
 
           call_api GET /api/sync-cron
 
+      - name: 1.5. Salvar backup temporário do banco de dados
+        id: backup
+        if: ${{ always() && steps.sync.outcome != 'cancelled' }}
+        env:
+          DEPLOYMENT_URL: ${{ secrets.DEPLOYMENT_URL || vars.DEPLOYMENT_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "::warning::DEPLOYMENT_URL ausente — pulando backup."
+            exit 0
+          fi
+
+          url="${DEPLOYMENT_URL%/}/api/data/export?requesterRole=admin"
+          curl_args=(
+            -sS
+            -o /tmp/db-backup.json
+            -w "%{http_code}"
+            -X GET
+            --retry 3
+            --retry-delay 5
+            --retry-all-errors
+            --max-time 55
+          )
+
+          if [ -n "$CRON_SECRET" ]; then
+            curl_args+=(-H "Authorization: Bearer $CRON_SECRET")
+          fi
+
+          status=$(curl "${curl_args[@]}" "$url")
+          echo "[GET /api/data/export] Status: $status"
+
+          if [ "$status" != "200" ]; then
+            echo "::error::Falha ao exportar backup (HTTP $status)"
+            exit 1
+          fi
+
+          echo "TIMESTAMP=$(date +'%Y%m%d_%H%M%S')" >> $GITHUB_ENV
+
+      - name: Enviar backup para os Artifacts do GitHub
+        uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.backup.outcome == 'success' }}
+        with:
+          name: db-backup-${{ env.TIMESTAMP }}
+          path: /tmp/db-backup.json
+          retention-days: 5
+
       - name: 2. Enviar notificações pendentes aos dispositivos
         id: dispatch
         if: ${{ always() && steps.sync.outcome != 'cancelled' }}

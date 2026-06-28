@@ -1132,6 +1132,18 @@ app.post('/api/guesses', async (req, res) => {
       // Find or create guess
       let guess = db.guesses.find(g => g.matchId === matchId && g.userName.toLowerCase() === userName.toLowerCase());
 
+      // Ensure user exists in db.users
+      let user = db.users.find(u => u.name.toLowerCase() === userName.toLowerCase());
+      if (!user) {
+        user = {
+          id: generateId(),
+          name: userName.trim(),
+          role: 'player',
+          createdAt: new Date().toISOString()
+        };
+        db.users.push(user);
+      }
+
       if (guess) {
         // Durante o jogo, não permite alterar palpite existente (apenas admin)
         if (hasStarted && requesterRole !== 'admin') {
@@ -1308,12 +1320,40 @@ app.get('/api/ranking', async (req, res) => {
   const { league = 'fifa.world' } = req.query;
 
   try {
-    const db = await getData();
-    const users = db.users;
-    const guesses = db.guesses;
+    let dbChanged = false;
+    let users = [];
+    let guesses = [];
+    let leagueMatches = [];
 
-    // Filter matches that belong to this league
-    const leagueMatches = db.matches.filter(m => (m.league || 'fifa.world') === league);
+    await runExclusive(async () => {
+      const db = await getData();
+      if (!db.users) db.users = [];
+      if (!db.guesses) db.guesses = [];
+
+      const userNames = new Set(db.users.map(u => u.name.toLowerCase()));
+      db.guesses.forEach(g => {
+        const trimmedName = g.userName.trim();
+        if (trimmedName && !userNames.has(trimmedName.toLowerCase())) {
+          const newUser = {
+            id: generateId(),
+            name: trimmedName,
+            role: 'player',
+            createdAt: new Date().toISOString()
+          };
+          db.users.push(newUser);
+          userNames.add(trimmedName.toLowerCase());
+          dbChanged = true;
+        }
+      });
+
+      if (dbChanged) {
+        await saveData(db);
+      }
+
+      users = [...db.users];
+      guesses = [...db.guesses];
+      leagueMatches = db.matches.filter(m => (m.league || 'fifa.world') === league);
+    });
     const leagueMatchIds = new Set(leagueMatches.map(m => m.id));
 
     // Calculate scores for each user
