@@ -111,9 +111,18 @@ async function runServerSideSyncCycle() {
   const activeLeagues = getActiveLeaguesFromDb(dbBefore);
   const leaguesToSync = activeLeagues.size > 0 ? [...activeLeagues] : ALL_LEAGUES;
 
+  let totalMatchesUpdated = 0;
+  let totalMatchesCreated = 0;
+  let totalNotificationsSent = 0;
+
   for (const league of leaguesToSync) {
     try {
-      await syncWithWorldCupAPI(league, true);
+      const res = await syncWithWorldCupAPI(league, true);
+      if (res) {
+        totalMatchesUpdated += res.matchesUpdated || 0;
+        totalMatchesCreated += res.matchesCreated || 0;
+        totalNotificationsSent += res.notificationsSent || 0;
+      }
     } catch (err) {
       console.error(`Error syncing league ${league}:`, err);
     }
@@ -125,6 +134,9 @@ async function runServerSideSyncCycle() {
   return {
     activeLeagues: [...activeLeagues],
     synced: leaguesToSync,
+    matchesUpdated: totalMatchesUpdated,
+    matchesCreated: totalMatchesCreated,
+    notificationsSent: totalNotificationsSent,
     pendingBefore,
     pendingAfter,
     newlyQueued: Math.max(0, pendingAfter - pendingBefore)
@@ -573,17 +585,21 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
   const lastSync = lastSyncTimes[league] || 0;
   if (!force && (now - lastSync < 30000)) {
     // Cache de 30 segundos por campeonato
-    return;
+    return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0 };
   }
 
   // Se já houver sincronização ativa para esta liga, aguarda a promessa terminar
   if (syncPromises[league]) {
     await syncPromises[league];
-    return;
+    return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0 };
   }
 
   let resolveSync;
   syncPromises[league] = new Promise(resolve => { resolveSync = resolve; });
+
+  let matchesUpdated = 0;
+  let matchesCreated = 0;
+  let notificationsSent = 0;
 
   try {
     // Build URLs based on selected league
@@ -620,7 +636,7 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
       }
     }
 
-    if (allEvents.length === 0) return;
+    if (allEvents.length === 0) return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0 };
 
     const updatedMatchesToNotify = [];
     await runExclusive(async () => {
@@ -716,8 +732,9 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
             league: league,
             createdAt: new Date().toISOString()
           };
-          db.matches.push(match);
+           db.matches.push(match);
           dbChanged = true;
+          matchesCreated++;
         } else {
           // Skip manually updated matches
           if (match.manuallyUpdated) {
@@ -799,17 +816,22 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
       }
     });
 
+    matchesUpdated = updatedMatchesToNotify.length;
+
     if (updatedMatchesToNotify.length > 0) {
       for (const item of updatedMatchesToNotify) {
         await checkAndSendPushNotificationsForMatch(item.oldMatch, item.newMatch);
       }
-      await dispatchPendingNotifications();
+      const dispatchResult = await dispatchPendingNotifications();
+      notificationsSent = dispatchResult.dispatched;
     }
 
     lastSyncTimes[league] = now;
     console.log(`Database successfully synced with ESPN API for league: ${league}`);
+    return { matchesUpdated, matchesCreated, notificationsSent };
   } catch (error) {
     console.error(`Error syncing with ESPN API for league ${league}:`, error);
+    return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0 };
   } finally {
     delete syncPromises[league];
     if (resolveSync) resolveSync();
@@ -1952,7 +1974,7 @@ async function checkAndSendPushNotificationsForMatch(oldMatch, newMatch) {
       matchFinished: true
     };
 
-    if (settings.goals && newMatch.status === 'live' && (scoreAChanged || scoreBChanged)) {
+    if (settings.goals && (newMatch.status === 'live' || newMatch.status === 'finished') && (scoreAChanged || scoreBChanged)) {
       const goalsA = (newMatch.scoreA || 0) - (oldMatch.scoreA || 0);
       const goalsB = (newMatch.scoreB || 0) - (oldMatch.scoreB || 0);
 
