@@ -44,22 +44,28 @@ jobs:
               -o /tmp/bolao-response.txt
               -w "%{http_code}"
               -X "$method"
-              --retry 5
-              --retry-delay 10
+              --retry 8
+              --retry-delay 15
               --retry-all-errors
-              --connect-timeout 15
-              --max-time 60
+              --connect-timeout 30
+              --max-time 300
             )
 
             if [ -n "$CRON_SECRET" ]; then
               curl_args+=(-H "Authorization: Bearer $CRON_SECRET")
             fi
 
-            status=$(curl "${curl_args[@]}" "$url")
-            body=$(cat /tmp/bolao-response.txt)
+            curl_exit=0
+            status=$(curl "${curl_args[@]}" "$url") || curl_exit=$?
+            body=$(cat /tmp/bolao-response.txt || true)
 
-            echo "[$method $path] Status: $status"
+            echo "[$method $path] Status: $status (curl exit: $curl_exit)"
             echo "Resposta: $body"
+
+            if [ "$curl_exit" -ne 0 ]; then
+              echo "::error::curl falhou com código $curl_exit para $path"
+              return 1
+            fi
 
             if [ "$status" != "200" ]; then
               echo "::error::Falha em $path (HTTP $status)"
@@ -89,19 +95,31 @@ jobs:
             -o /tmp/db-backup.json
             -w "%{http_code}"
             -X GET
-            --retry 5
-            --retry-delay 10
+            --retry 8
+            --retry-delay 15
             --retry-all-errors
-            --connect-timeout 15
-            --max-time 60
+            --connect-timeout 30
+            --max-time 300
           )
 
           if [ -n "$CRON_SECRET" ]; then
             curl_args+=(-H "Authorization: Bearer $CRON_SECRET")
           fi
 
-          status=$(curl "${curl_args[@]}" "$url")
-          echo "[GET /api/data/export] Status: $status"
+          curl_exit=0
+          status=$(curl "${curl_args[@]}" "$url") || curl_exit=$?
+
+          echo "[GET /api/data/export] Status: $status (curl exit: $curl_exit)"
+
+          if [ "$curl_exit" -ne 0 ] || [ "$status" != "200" ]; then
+            body=$(cat /tmp/db-backup.json || true)
+            echo "Resposta de erro: $body"
+          fi
+
+          if [ "$curl_exit" -ne 0 ]; then
+            echo "::error::curl falhou com código $curl_exit para exportar backup"
+            exit 1
+          fi
 
           if [ "$status" != "200" ]; then
             echo "::error::Falha ao exportar backup (HTTP $status)"
@@ -138,22 +156,28 @@ jobs:
             -o /tmp/bolao-dispatch.txt
             -w "%{http_code}"
             -X POST
-            --retry 5
-            --retry-delay 10
+            --retry 8
+            --retry-delay 15
             --retry-all-errors
-            --connect-timeout 15
-            --max-time 60
+            --connect-timeout 30
+            --max-time 300
           )
 
           if [ -n "$CRON_SECRET" ]; then
             curl_args+=(-H "Authorization: Bearer $CRON_SECRET")
           fi
 
-          status=$(curl "${curl_args[@]}" "$url")
-          body=$(cat /tmp/bolao-dispatch.txt)
+          curl_exit=0
+          status=$(curl "${curl_args[@]}" "$url") || curl_exit=$?
+          body=$(cat /tmp/bolao-dispatch.txt || true)
 
-          echo "[POST /api/notifications/dispatch-pending] Status: $status"
+          echo "[POST /api/notifications/dispatch-pending] Status: $status (curl exit: $curl_exit)"
           echo "Resposta: $body"
+
+          if [ "$curl_exit" -ne 0 ]; then
+            echo "::error::curl falhou com código $curl_exit ao enviar notificações pendentes"
+            exit 1
+          fi
 
           if [ "$status" != "200" ]; then
             echo "::error::Falha ao enviar notificações pendentes (HTTP $status)"
