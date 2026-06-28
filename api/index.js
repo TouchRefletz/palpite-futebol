@@ -1936,6 +1936,38 @@ async function enqueuePushNotification(userName, payload, dedupeKey = null) {
   return added;
 }
 
+async function enqueuePushNotificationsBulk(notifications) {
+  let queuedCount = 0;
+  await runExclusive(async () => {
+    const db = await getData();
+    if (!db.pendingPushNotifications) {
+      db.pendingPushNotifications = [];
+    }
+
+    for (const notif of notifications) {
+      const { userName, payload, dedupeKey } = notif;
+      if (dedupeKey && db.pendingPushNotifications.some(p => p.dedupeKey === dedupeKey)) {
+        continue;
+      }
+
+      db.pendingPushNotifications.push({
+        id: generateId(),
+        userName,
+        payload,
+        dedupeKey,
+        createdAt: new Date().toISOString(),
+        attempts: 0
+      });
+      queuedCount++;
+    }
+
+    if (queuedCount > 0) {
+      await saveData(db);
+    }
+  });
+  return queuedCount;
+}
+
 function getMatchIdFromNotification(item) {
   if (!item || !item.dedupeKey) return null;
   const parts = item.dedupeKey.split(':');
@@ -2179,6 +2211,7 @@ async function checkAndSendPushNotificationsForMatch(oldMatch, newMatch) {
   );
 
   let queued = 0;
+  const notificationsToEnqueue = [];
 
   for (const user of users) {
     if (!subscribedUsers.has(user.name.toLowerCase())) continue;
@@ -2216,39 +2249,40 @@ async function checkAndSendPushNotificationsForMatch(oldMatch, newMatch) {
         body = `Placar atualizado: ${newMatch.teamA} ${newMatch.scoreA} x ${newMatch.scoreB} ${newMatch.teamB}`;
       }
 
-      const added = await enqueuePushNotification(
-        user.name,
-        { title, body, url: `/?match=${newMatch.id}` },
-        `match:${newMatch.id}:score:${newMatch.scoreA}-${newMatch.scoreB}:${user.name.toLowerCase()}`
-      );
-      if (added) queued++;
+      notificationsToEnqueue.push({
+        userName: user.name,
+        payload: { title, body, url: `/?match=${newMatch.id}` },
+        dedupeKey: `match:${newMatch.id}:score:${newMatch.scoreA}-${newMatch.scoreB}:${user.name.toLowerCase()}`
+      });
     }
 
     if (settings.matchStarted && statusChanged && newMatch.status === 'live') {
-      const added = await enqueuePushNotification(
-        user.name,
-        {
+      notificationsToEnqueue.push({
+        userName: user.name,
+        payload: {
           title: "⏱️ Bola Rolando!",
           body: `Começou: ${newMatch.teamA} vs ${newMatch.teamB}`,
           url: `/?match=${newMatch.id}`
         },
-        `match:${newMatch.id}:start:${user.name.toLowerCase()}`
-      );
-      if (added) queued++;
+        dedupeKey: `match:${newMatch.id}:start:${user.name.toLowerCase()}`
+      });
     }
 
     if (settings.matchFinished && statusChanged && newMatch.status === 'finished') {
-      const added = await enqueuePushNotification(
-        user.name,
-        {
+      notificationsToEnqueue.push({
+        userName: user.name,
+        payload: {
           title: "🏁 Fim de Jogo!",
           body: `Resultado Final: ${newMatch.teamA} ${newMatch.scoreA} x ${newMatch.scoreB} ${newMatch.teamB}`,
           url: `/?match=${newMatch.id}`
         },
-        `match:${newMatch.id}:finish:${newMatch.scoreA}-${newMatch.scoreB}:${user.name.toLowerCase()}`
-      );
-      if (added) queued++;
+        dedupeKey: `match:${newMatch.id}:finish:${newMatch.scoreA}-${newMatch.scoreB}:${user.name.toLowerCase()}`
+      });
     }
+  }
+
+  if (notificationsToEnqueue.length > 0) {
+    queued = await enqueuePushNotificationsBulk(notificationsToEnqueue);
   }
 
   return queued;
@@ -2503,6 +2537,7 @@ async function checkAndSendPushReminders() {
     }
     
     let dbChanged = false;
+    const notificationsToEnqueue = [];
     
     for (const match of db.matches) {
       if (match.status !== 'pending') continue;
@@ -2560,18 +2595,15 @@ async function checkAndSendPushReminders() {
               }
               
               if (settings[t.key]) {
-                const added = await enqueuePushNotification(
-                  user.name,
-                  {
+                notificationsToEnqueue.push({
+                  userName: user.name,
+                  payload: {
                     title: "📝 Palpite Pendente!",
                     body: `O jogo ${match.teamA} vs ${match.teamB} começa em ${t.label}. Não esqueça de palpitar!`,
                     url: `/?match=${matchId}`
                   },
-                  `reminder:${matchId}:${t.time}:${user.name.toLowerCase()}`
-                );
-                if (added) {
-                  // counted via queue
-                }
+                  dedupeKey: `reminder:${matchId}:${t.time}:${user.name.toLowerCase()}`
+                });
               }
             }
           }
@@ -2580,6 +2612,10 @@ async function checkAndSendPushReminders() {
           dbChanged = true;
         }
       }
+    }
+    
+    if (notificationsToEnqueue.length > 0) {
+      await enqueuePushNotificationsBulk(notificationsToEnqueue);
     }
     
     if (dbChanged) {
