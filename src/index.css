@@ -543,20 +543,33 @@ header {
   flex-shrink: 0;
 }
 
-.marquee-content {
-  display: inline-flex;
+.marquee-track {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: marquee-scroll var(--marquee-duration, 20s) linear infinite;
+}
+
+.marquee-track-paused {
+  animation: none;
+}
+
+.marquee-group {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
   gap: 32px;
-  animation: marquee-infinite 20s linear infinite;
+  padding-right: 32px;
   white-space: nowrap;
 }
 
-@keyframes marquee-infinite {
-  0% {
+@keyframes marquee-scroll {
+  from {
     transform: translate3d(0, 0, 0);
   }
 
-  100% {
-    transform: translate3d(-50%, 0, 0);
+  to {
+    transform: translate3d(calc(-1 * var(--marquee-shift, 0px)), 0, 0);
   }
 }
 
@@ -1974,19 +1987,15 @@ header {
 
   .match-card-marquee {
     padding: 6px 12px;
-    contain: layout paint;
   }
 
   .match-card-live .match-card-marquee {
     padding: 6px 0;
   }
 
-  .match-card-live .marquee-content {
-    display: inline-flex;
-    flex-wrap: nowrap;
+  .marquee-group {
     gap: 20px;
-    white-space: nowrap;
-    animation: marquee-infinite 24s linear infinite;
+    padding-right: 20px;
   }
 
   .marquee-item {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Trophy, 
   Calendar, 
@@ -567,6 +567,82 @@ function calculateLivePoints(guessA, guessB, resultA, resultB) {
   }
 
   return 10;
+}
+
+const MARQUEE_SCROLL_SPEED = 36; // px/s
+
+function MatchMarquee({ items, renderItem }) {
+  const containerRef = useRef(null);
+  const groupRef = useRef(null);
+  const [metrics, setMetrics] = useState(null);
+  const measureKey = items.map(item => item.userName).join('\0');
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const measure = () => {
+      const group = groupRef.current;
+      if (!group) return;
+
+      const containerWidth = container.clientWidth;
+      const groupWidth = group.scrollWidth;
+      if (!groupWidth) return;
+
+      const copies = Math.max(2, Math.ceil((containerWidth * 2) / groupWidth) + 1);
+      const duration = Math.max(12, groupWidth / MARQUEE_SCROLL_SPEED);
+
+      setMetrics(prev => {
+        if (
+          prev &&
+          prev.shift === groupWidth &&
+          prev.copies === copies &&
+          Math.abs(prev.duration - duration) < 0.25
+        ) {
+          return prev;
+        }
+        return { shift: groupWidth, duration, copies };
+      });
+    };
+
+    measure();
+
+    const ro = new ResizeObserver(measure);
+    ro.observe(container);
+    if (groupRef.current) ro.observe(groupRef.current);
+
+    return () => ro.disconnect();
+  }, [measureKey]);
+
+  const copies = metrics?.copies ?? 2;
+  const groupContent = items.map((item, idx) => (
+    <span key={item.userName || idx} className="marquee-item">
+      {renderItem(item)}
+    </span>
+  ));
+
+  return (
+    <div className="match-card-marquee" ref={containerRef}>
+      <div
+        className={`marquee-track${metrics ? '' : ' marquee-track-paused'}`}
+        style={metrics ? {
+          '--marquee-shift': `${metrics.shift}px`,
+          '--marquee-duration': `${metrics.duration}s`,
+        } : undefined}
+      >
+        {Array.from({ length: copies }, (_, copyIndex) => (
+          <div
+            key={copyIndex}
+            className="marquee-group"
+            ref={copyIndex === 0 ? groupRef : undefined}
+            aria-hidden={copyIndex > 0 ? true : undefined}
+          >
+            {groupContent}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 
@@ -2661,12 +2737,6 @@ function App() {
 
                 const otherGuesses = match.otherGuesses || [];
                 const hasGuesses = otherGuesses.length > 0;
-                let marqueeItems = [];
-                if (hasGuesses) {
-                  marqueeItems = match.status === 'live'
-                    ? [...otherGuesses, ...otherGuesses]
-                    : otherGuesses;
-                }
                 
                 return (
                   <div 
@@ -2749,19 +2819,20 @@ function App() {
 
                     {/* Footer marquee panel */}
                     {hasGuesses ? (
-                      <div className="match-card-marquee">
-                        <div className="marquee-content">
-                          {marqueeItems.map((g, idx) => (
-                            <span key={idx} className="marquee-item">
-                              👤 <strong>{g.userName}</strong>: {g.scoreA}x{g.scoreB}
-                              {isFinished && <span className="marquee-points"> (+{g.points} pts)</span>}
-                              {match.status === 'live' && (
-                                <span className="marquee-points live-points"> (+{calculateLivePoints(g.scoreA, g.scoreB, match.scoreA, match.scoreB)} pts)</span>
-                              )}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
+                      <MatchMarquee
+                        items={otherGuesses}
+                        renderItem={(g) => (
+                          <>
+                            👤 <strong>{g.userName}</strong>: {g.scoreA}x{g.scoreB}
+                            {isFinished && <span className="marquee-points"> (+{g.points} pts)</span>}
+                            {match.status === 'live' && (
+                              <span className="marquee-points live-points">
+                                {' '}(+{calculateLivePoints(g.scoreA, g.scoreB, match.scoreA, match.scoreB)} pts)
+                              </span>
+                            )}
+                          </>
+                        )}
+                      />
                     ) : (
                       <div className="match-card-marquee-empty">
                         <span>👥 Nenhum palpite dos amigos ainda. Seja o primeiro!</span>
