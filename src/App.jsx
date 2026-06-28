@@ -4537,7 +4537,7 @@ function App() {
                 {notificationPermissionStatus === 'granted' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', alignItems: 'center' }}>
                     <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                      Você receberá alertas do sistema na tela do seu computador ou celular mesmo com o site fechado!
+                      Alertas de gol e partida são enviados pelo servidor — você recebe mesmo com o site fechado, desde que este aparelho esteja sincronizado.
                     </p>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
                       <button 

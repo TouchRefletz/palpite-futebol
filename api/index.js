@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { waitUntil } from '@vercel/functions';
 import { getData, saveData, runExclusive } from './db.js';
 import webpush from 'web-push';
 
@@ -72,6 +73,52 @@ function calculatePoints(guessA, guessB, resultA, resultB) {
 
 let lastSyncTimes = {};
 let syncPromises = {};
+
+const ALL_LEAGUES = ['fifa.world', 'bra.1', 'uefa.champions', 'eng.1', 'esp.1'];
+
+function getActiveLeaguesFromDb(db) {
+  const activeLeagues = new Set();
+  const now = Date.now();
+  if (!db.matches) return activeLeagues;
+
+  for (const match of db.matches) {
+    const matchTime = new Date(match.date).getTime();
+    const startDiff = (matchTime - now) / 60000;
+    const isLive = match.status === 'live';
+    const isUpcoming = match.status === 'pending' && startDiff >= -10 && startDiff <= 15;
+
+    if (isLive || isUpcoming) {
+      const league = match.league || 'fifa.world';
+      if (ALL_LEAGUES.includes(league)) {
+        activeLeagues.add(league);
+      }
+    }
+  }
+
+  return activeLeagues;
+}
+
+async function runServerSideSyncCycle() {
+  if (!vapidPublic) {
+    await initVapidKeys();
+  }
+
+  await checkAndSendPushReminders();
+
+  const db = await getData();
+  const activeLeagues = getActiveLeaguesFromDb(db);
+  const leaguesToSync = activeLeagues.size > 0 ? [...activeLeagues] : ALL_LEAGUES;
+
+  for (const league of leaguesToSync) {
+    try {
+      await syncWithWorldCupAPI(league, true);
+    } catch (err) {
+      console.error(`Error syncing league ${league}:`, err);
+    }
+  }
+
+  return { activeLeagues: [...activeLeagues], synced: leaguesToSync };
+}
 
 const STADIUM_OFFSETS = {
   "1": -6, // Mexico City
@@ -731,11 +778,9 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
       if (dbChanged) {
         await saveData(db);
         if (updatedMatchesToNotify.length > 0) {
-          setTimeout(async () => {
-            for (const item of updatedMatchesToNotify) {
-              await checkAndSendPushNotificationsForMatch(item.oldMatch, item.newMatch);
-            }
-          }, 0);
+          for (const item of updatedMatchesToNotify) {
+            await checkAndSendPushNotificationsForMatch(item.oldMatch, item.newMatch);
+          }
         }
       }
     });
@@ -808,9 +853,10 @@ app.get('/api/matches', async (req, res) => {
   const { userName, league = 'fifa.world' } = req.query;
 
   try {
-    // Trigger sync in the background (non-blocking) to keep database updated.
-    // GitHub Actions também dispara /api/sync-cron periodicamente.
-    syncWithWorldCupAPI(league).catch(err => console.error('Background sync error:', err));
+    // Sync em background com waitUntil para o push completar antes do serverless encerrar.
+    waitUntil(
+      syncWithWorldCupAPI(league).catch(err => console.error('Background sync error:', err))
+    );
     const db = await getData();
     // Filter matches for the selected league
     const matches = db.matches.filter(m => (m.league || 'fifa.world') === league);
@@ -1156,9 +1202,7 @@ app.post('/api/results', async (req, res) => {
     });
 
     if (oldMatchForPush && newMatchForPush) {
-      setTimeout(() => {
-        checkAndSendPushNotificationsForMatch(oldMatchForPush, newMatchForPush);
-      }, 0);
+      await checkAndSendPushNotificationsForMatch(oldMatchForPush, newMatchForPush);
     }
 
     if (errorResponse) {
@@ -1682,9 +1726,7 @@ app.post('/api/copa2026/simulate-live', async (req, res) => {
     });
 
     if (oldMatchForPush && newMatchForPush) {
-      setTimeout(() => {
-        checkAndSendPushNotificationsForMatch(oldMatchForPush, newMatchForPush);
-      }, 0);
+      await checkAndSendPushNotificationsForMatch(oldMatchForPush, newMatchForPush);
     }
 
     if (errorResponse) {
@@ -1786,8 +1828,13 @@ async function checkAndSendPushNotificationsForMatch(oldMatch, newMatch) {
   
   const db = await getData();
   const users = db.users || [];
+  const subscribedUsers = new Set(
+    (db.pushSubscriptions || []).map(s => s.userName.toLowerCase())
+  );
   
   for (const user of users) {
+    if (!subscribedUsers.has(user.name.toLowerCase())) continue;
+
     const settings = user.notificationSettings || {
       goals: true,
       matchStarted: true,
@@ -1955,91 +2002,27 @@ app.post('/api/users/settings', async (req, res) => {
 });
 
 app.get('/api/sync-cron', async (req, res) => {
-  // Valida autenticação quando CRON_SECRET está configurado (GitHub Actions envia o Bearer token).
   const authHeader = req.headers.authorization;
   if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     console.log('Unauthorized cron access attempt.');
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const startTime = Date.now();
   console.log('Cron sync triggered.');
 
   try {
     const { getLock, releaseLock } = await import('./db.js');
-    
-    // Tenta adquirir lock por 55 segundos (tempo máximo de execução)
-    const lockAcquired = await getLock('cron_active', 55);
+    const lockAcquired = await getLock('cron_active', 50);
     if (!lockAcquired) {
       console.log('Another cron instance is already running. Skipping execution.');
       return res.status(200).json({ message: 'Another cron instance is running.' });
     }
 
-    const db = await getData();
-    const leagues = ['fifa.world', 'bra.1', 'uefa.champions', 'eng.1', 'esp.1'];
-    
-    const activeLeagues = new Set();
-    const now = Date.now();
-    
-    if (db.matches && db.matches.length > 0) {
-      for (const match of db.matches) {
-        const matchTime = new Date(match.date).getTime();
-        const startDiff = (matchTime - now) / 60000;
-        
-        const isLive = match.status === 'live';
-        const isUpcoming = match.status === 'pending' && startDiff >= -10 && startDiff <= 15;
-        
-        if (isLive || isUpcoming) {
-          const league = match.league || 'fifa.world';
-          if (leagues.includes(league)) {
-            activeLeagues.add(league);
-          }
-        }
-      }
-    }
-
-    // Executa verificação de lembretes de palpites pendentes
-    await checkAndSendPushReminders();
-
-    if (activeLeagues.size === 0) {
-      // Nenhum jogo ao vivo ou próximo: faz sincronização única de todas as ligas e sai
-      console.log('No live or upcoming matches found. Performing single-pass sync for all leagues.');
-      for (const league of leagues) {
-        try {
-          await syncWithWorldCupAPI(league, true);
-        } catch (err) {
-          console.error(`Error in cron single-pass sync for ${league}:`, err);
-        }
-      }
-      await releaseLock('cron_active');
-      console.log('Cron single-pass sync complete.');
-      return res.status(200).json({ message: 'Single-pass sync complete. No active live games.' });
-    }
-
-    // Temos ligas com jogos ao vivo ou prestes a começar: inicia loop de alta frequência
-    console.log(`Active leagues for high-frequency live polling: ${Array.from(activeLeagues).join(', ')}`);
-    
-    while (Date.now() - startTime < 55000) {
-      const loopStart = Date.now();
-      
-      for (const league of activeLeagues) {
-        try {
-          await syncWithWorldCupAPI(league, true);
-        } catch (err) {
-          console.error(`Error during high-frequency sync for league ${league}:`, err);
-        }
-      }
-      
-      const elapsed = Date.now() - loopStart;
-      const sleepTime = 5000 - elapsed; // Polling a cada 5 segundos
-      if (sleepTime > 0) {
-        await new Promise(resolve => setTimeout(resolve, sleepTime));
-      }
-    }
+    const result = await runServerSideSyncCycle();
 
     await releaseLock('cron_active');
-    console.log('Cron high-frequency polling completed successfully.');
-    return res.status(200).json({ message: 'High-frequency polling complete.' });
+    console.log('Cron sync complete.', result);
+    return res.status(200).json({ message: 'Sync complete.', ...result });
   } catch (error) {
     console.error('Error in cron handler:', error);
     try {
@@ -2143,9 +2126,11 @@ async function checkAndSendPushReminders() {
   }
 }
 
-// Executa o scheduler localmente a cada 60 segundos se não estiver na Vercel
+// Scheduler server-side: roda sync + push automaticamente sem precisar do site aberto
 if (!process.env.VERCEL) {
-  setInterval(checkAndSendPushReminders, 60000);
+  setInterval(() => {
+    runServerSideSyncCycle().catch(err => console.error('Local sync cycle error:', err));
+  }, 60000);
 }
 
 export default app;
