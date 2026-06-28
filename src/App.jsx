@@ -261,7 +261,7 @@ const getTimeFilterLabel = (filter) => {
   return '';
 };
 
-const MatchClock = ({ match, customFinishedText, customPendingText, prefix = '' }) => {
+const MatchClock = React.memo(({ match, customFinishedText, customPendingText, prefix = '' }) => {
   const [displayClock, setDisplayClock] = useState('');
 
   useEffect(() => {
@@ -318,7 +318,7 @@ const MatchClock = ({ match, customFinishedText, customPendingText, prefix = '' 
   }
 
   return <>{displayClock}</>;
-};
+});
 
 const LeagueDropdown = ({ selectedLeague, setSelectedLeague }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -2661,13 +2661,15 @@ function App() {
                 const hasGuesses = otherGuesses.length > 0;
                 let marqueeItems = [];
                 if (hasGuesses) {
-                  marqueeItems = [...otherGuesses, ...otherGuesses, ...otherGuesses, ...otherGuesses];
+                  marqueeItems = match.status === 'live'
+                    ? [...otherGuesses, ...otherGuesses]
+                    : otherGuesses;
                 }
                 
                 return (
                   <div 
                     key={match.id} 
-                    className="match-card glass-panel" 
+                    className={`match-card${match.status === 'live' ? ' match-card-live' : ''}`} 
                     style={cardStyle}
                     onClick={() => setActiveMatchDetails(match)}
                   >
@@ -2687,58 +2689,59 @@ function App() {
 
                     {/* Main Scoreboard Body */}
                     <div className="match-card-body">
-                      <div className="team-side team-a">
-                        {renderTeamFlag(match.teamA, "team-flag-split", match.teamALogo)}
-                        <span className="team-name-split" title={match.teamA}>{match.teamA}</span>
-                      </div>
-                      
-                      <div className="scoreboard-center">
-                        {isFinished || match.status === 'live' ? (
-                          <div className="score-display-split">
-                            <span className="score-num-split" style={match.status === 'live' ? { color: '#ef4444' } : {}}>{match.scoreA}</span>
-                            <span className="score-divider-split">-</span>
-                            <span className="score-num-split" style={match.status === 'live' ? { color: '#ef4444' } : {}}>{match.scoreB}</span>
-                          </div>
-                        ) : (
-                          <div className="score-display-split vs">
-                            <span>VS</span>
-                          </div>
-                        )}
+                      <div className="match-card-teams-row">
+                        <div className="team-side team-a">
+                          {renderTeamFlag(match.teamA, "team-flag-split", match.teamALogo)}
+                          <span className="team-name-split" title={match.teamA}>{match.teamA}</span>
+                        </div>
 
-                        {/* User Guess shown centered below the score */}
-                        <div className="match-card-center-guess">
-                          {match.userGuess ? (
-                            <div className="user-guess-box-row">
-                              <span className="guess-label">Palpite:</span>
-                              <span className="guess-value">{match.userGuess.scoreA} x {match.userGuess.scoreB}</span>
-                              {match.userGuess.status === 'pending' && (
-                                <span className="indicator-badge pending" style={{ fontSize: '8px', padding: '2px 6px', marginLeft: '4px' }}>⏳ Pendente</span>
-                              )}
-                              {match.userGuess.status === 'rejected' && (
-                                <span className="indicator-badge missed" style={{ fontSize: '8px', padding: '2px 6px', marginLeft: '4px' }}>❌ Rejeitado</span>
-                              )}
-                              {isFinished && (!match.userGuess.status || match.userGuess.status === 'approved') && (
-                                <span className="guess-points">+{match.userGuess.points} pts</span>
-                              )}
-                              {match.status === 'live' && (!match.userGuess.status || match.userGuess.status === 'approved') && (
-                                <span className="guess-points live-points" title="Pontos parciais neste momento">
-                                  +{calculateLivePoints(match.userGuess.scoreA, match.userGuess.scoreB, match.scoreA, match.scoreB)} pts
-                                </span>
-                              )}
+                        <div className="scoreboard-center">
+                          {isFinished || match.status === 'live' ? (
+                            <div className="score-display-split">
+                              <span className="score-num-split" style={match.status === 'live' ? { color: '#ef4444' } : {}}>{match.scoreA}</span>
+                              <span className="score-divider-split">-</span>
+                              <span className="score-num-split" style={match.status === 'live' ? { color: '#ef4444' } : {}}>{match.scoreB}</span>
                             </div>
                           ) : (
-                            !hasStarted ? (
-                              <span className="indicator-badge pending">⏳ Sem Palpite</span>
-                            ) : (
-                              <span className="indicator-badge missed">❌ Sem Palpite</span>
-                            )
+                            <div className="score-display-split vs">
+                              <span>VS</span>
+                            </div>
                           )}
                         </div>
+
+                        <div className="team-side team-b">
+                          <span className="team-name-split" title={match.teamB}>{match.teamB}</span>
+                          {renderTeamFlag(match.teamB, "team-flag-split", match.teamBLogo)}
+                        </div>
                       </div>
-                      
-                      <div className="team-side team-b">
-                        <span className="team-name-split" title={match.teamB}>{match.teamB}</span>
-                        {renderTeamFlag(match.teamB, "team-flag-split", match.teamBLogo)}
+
+                      <div className="match-card-center-guess">
+                        {match.userGuess ? (
+                          <div className="user-guess-box-row">
+                            <span className="guess-label">Palpite:</span>
+                            <span className="guess-value">{match.userGuess.scoreA} x {match.userGuess.scoreB}</span>
+                            {match.userGuess.status === 'pending' && (
+                              <span className="indicator-badge pending guess-status-badge">⏳ Pendente</span>
+                            )}
+                            {match.userGuess.status === 'rejected' && (
+                              <span className="indicator-badge missed guess-status-badge">❌ Rejeitado</span>
+                            )}
+                            {isFinished && (!match.userGuess.status || match.userGuess.status === 'approved') && (
+                              <span className="guess-points">+{match.userGuess.points} pts</span>
+                            )}
+                            {match.status === 'live' && (!match.userGuess.status || match.userGuess.status === 'approved') && (
+                              <span className="guess-points live-points" title="Pontos parciais neste momento">
+                                +{calculateLivePoints(match.userGuess.scoreA, match.userGuess.scoreB, match.scoreA, match.scoreB)} pts
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          !hasStarted ? (
+                            <span className="indicator-badge pending">⏳ Sem Palpite</span>
+                          ) : (
+                            <span className="indicator-badge missed">❌ Sem Palpite</span>
+                          )
+                        )}
                       </div>
                     </div>
 
