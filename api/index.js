@@ -85,7 +85,7 @@ function getActiveLeaguesFromDb(db) {
     const matchTime = new Date(match.date).getTime();
     const startDiff = (matchTime - now) / 60000;
     const isLive = match.status === 'live';
-    const isUpcoming = match.status === 'pending' && startDiff >= -10 && startDiff <= 15;
+    const isUpcoming = match.status === 'pending' && startDiff >= -360 && startDiff <= 15;
 
     if (isLive || isUpcoming) {
       const league = match.league || 'fifa.world';
@@ -115,16 +115,22 @@ async function runServerSideSyncCycle() {
   let totalMatchesCreated = 0;
   let totalNotificationsSent = 0;
 
-  for (const league of leaguesToSync) {
-    try {
-      const res = await syncWithWorldCupAPI(league, true);
-      if (res) {
-        totalMatchesUpdated += res.matchesUpdated || 0;
-        totalMatchesCreated += res.matchesCreated || 0;
-        totalNotificationsSent += res.notificationsSent || 0;
+  const results = await Promise.all(
+    leaguesToSync.map(async (league) => {
+      try {
+        return await syncWithWorldCupAPI(league, true);
+      } catch (err) {
+        console.error(`Error syncing league ${league}:`, err);
+        return null;
       }
-    } catch (err) {
-      console.error(`Error syncing league ${league}:`, err);
+    })
+  );
+
+  for (const res of results) {
+    if (res) {
+      totalMatchesUpdated += res.matchesUpdated || 0;
+      totalMatchesCreated += res.matchesCreated || 0;
+      totalNotificationsSent += res.notificationsSent || 0;
     }
   }
 
