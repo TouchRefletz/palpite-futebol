@@ -122,7 +122,7 @@ jobs:
             exit 0
           fi
 
-          LOOP_DELAY_SECONDS="${LOOP_DELAY_SECONDS:-10}"
+          LOOP_DELAY_SECONDS="${LOOP_DELAY_SECONDS:-0}"
           echo "Aguardando ${LOOP_DELAY_SECONDS}s antes de disparar a próxima execução..."
           sleep "$LOOP_DELAY_SECONDS"
 
