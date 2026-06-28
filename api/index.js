@@ -796,14 +796,15 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
 
       if (dbChanged) {
         await saveData(db);
-        if (updatedMatchesToNotify.length > 0) {
-          for (const item of updatedMatchesToNotify) {
-            await checkAndSendPushNotificationsForMatch(item.oldMatch, item.newMatch);
-          }
-          await dispatchPendingNotifications();
-        }
       }
     });
+
+    if (updatedMatchesToNotify.length > 0) {
+      for (const item of updatedMatchesToNotify) {
+        await checkAndSendPushNotificationsForMatch(item.oldMatch, item.newMatch);
+      }
+      await dispatchPendingNotifications();
+    }
 
     lastSyncTimes[league] = now;
     console.log(`Database successfully synced with ESPN API for league: ${league}`);
