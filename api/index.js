@@ -590,16 +590,16 @@ function extractScorers(competition, teamId) {
 
 async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
   const now = Date.now();
-  const lastSync = lastSyncTimes[league] || 0;
-  if (!force && (now - lastSync < 30000)) {
-    // Cache de 30 segundos por campeonato
-    return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0 };
+  const inMemoryLastSync = lastSyncTimes[league] || 0;
+  if (!force && (now - inMemoryLastSync < 30000)) {
+    // Cache de 30 segundos em memória (fast path)
+    return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0, cached: true };
   }
 
   // Se já houver sincronização ativa para esta liga, aguarda a promessa terminar
   if (syncPromises[league]) {
     await syncPromises[league];
-    return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0 };
+    return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0, cached: true };
   }
 
   let resolveSync;
@@ -610,6 +610,38 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
   let notificationsSent = 0;
 
   try {
+    const db = await getData();
+    const dbLastSyncTimes = db.lastSyncTimes || {};
+    const lastSync = dbLastSyncTimes[league] || 0;
+
+    // Determina se a liga está "ativa" (jogos ao vivo ou próximos de começar/recentes)
+    let isActive = false;
+    if (db.matches) {
+      for (const match of db.matches) {
+        if ((match.league || 'fifa.world') !== league) continue;
+        const matchTime = new Date(match.date).getTime();
+        const startDiff = (matchTime - now) / 60000;
+        
+        const isLive = match.status === 'live';
+        // Começa em até 15 minutos ou começou/terminou nas últimas 6 horas
+        const isUpcomingOrRecent = startDiff >= -360 && startDiff <= 15;
+        
+        if (isLive || isUpcomingOrRecent) {
+          isActive = true;
+          break;
+        }
+      }
+    }
+
+    // Limite de cache: 3 minutos (180.000 ms) se ativo, 2 horas (7.200.000 ms) se inativo
+    const cacheLimit = isActive ? 180000 : 7200000;
+
+    if (!force && (now - lastSync < cacheLimit)) {
+      // Atualiza o cache em memória local com o valor do banco
+      lastSyncTimes[league] = lastSync;
+      return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0, cached: true };
+    }
+
     // Build URLs based on selected league
     let urls = [];
     if (league === 'fifa.world') {
@@ -644,12 +676,27 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
       }
     }
 
-    if (allEvents.length === 0) return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0 };
+    if (allEvents.length === 0) {
+      // Salva o lastSync no banco mesmo que não venha evento para respeitar o cache de falha/vazio
+      await runExclusive(async () => {
+        const dbUpdate = await getData();
+        if (!dbUpdate.lastSyncTimes) dbUpdate.lastSyncTimes = {};
+        dbUpdate.lastSyncTimes[league] = now;
+        await saveData(dbUpdate);
+      });
+      lastSyncTimes[league] = now;
+      return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0 };
+    }
 
     const updatedMatchesToNotify = [];
     await runExclusive(async () => {
       const db = await getData();
       let dbChanged = false;
+
+      // Persiste o tempo do sync atual no banco
+      if (!db.lastSyncTimes) db.lastSyncTimes = {};
+      db.lastSyncTimes[league] = now;
+      dbChanged = true;
 
       for (const e of allEvents) {
         const comp = e.competitions[0];
@@ -834,7 +881,7 @@ async function syncWithWorldCupAPI(league = 'fifa.world', force = false) {
 
     lastSyncTimes[league] = now;
     console.log(`Database successfully synced with ESPN API for league: ${league}`);
-    return { matchesUpdated, matchesCreated, notificationsSent };
+    return { matchesUpdated, matchesCreated, notificationsSent, hadActualSync: true };
   } catch (error) {
     console.error(`Error syncing with ESPN API for league ${league}:`, error);
     return { matchesUpdated: 0, matchesCreated: 0, notificationsSent: 0 };
@@ -905,8 +952,11 @@ app.get('/api/matches', async (req, res) => {
     // Sync em background com waitUntil para o push completar antes do serverless encerrar.
     waitUntil(
       (async () => {
-        await syncWithWorldCupAPI(league);
-        await dispatchPendingNotifications();
+        const syncResult = await syncWithWorldCupAPI(league);
+        if (syncResult && !syncResult.cached) {
+          await checkAndSendPushReminders();
+          await dispatchPendingNotifications();
+        }
       })().catch(err => console.error('Background sync and dispatch error:', err))
     );
     const db = await getData();
